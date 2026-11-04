@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.0.5-1"
+__version__ = "1.0.8-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
