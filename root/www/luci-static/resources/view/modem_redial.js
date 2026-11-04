@@ -238,16 +238,27 @@ return view.extend({
 						ui.addNotification(null, E('p', '光猫后台地址、用户名或密码未配置，请先保存配置！'));
 						return;
 					}
+					if (stdout.indexOf('ALREADY_RUNNING') !== -1) {
+						ui.addNotification(null, E('p', '已有重拨换IP任务正在后台运行中，请勿重复触发！'));
+						return;
+					}
 				}).catch(function(err) {
-					if (window._modemRedialTimer) {
-						clearInterval(window._modemRedialTimer);
-						window._modemRedialTimer = null;
-					}
-					if (btn) {
-						btn.disabled = false;
-						btn.innerText = '⚡ 立即重拨换IP';
-					}
-					ui.addNotification(null, E('p', '启动重拨任务失败: ' + (err.message || err)));
+					// 容错处理：光猫重拨断网瞬间可能伴随短暂网络瞬断，先校验是否已在后台平稳运行
+					L.resolveDefault(fs.read('/tmp/log/modem_redial.log'), '').then(function(logTxt) {
+						if (logTxt && (logTxt.indexOf('正在') !== -1 || logTxt.indexOf('步骤') !== -1 || logTxt.indexOf('切换') !== -1 || logTxt.indexOf('探测') !== -1 || logTxt.indexOf('重拨') !== -1)) {
+							// 守护任务已在平稳推进中，不中断轮询，不弹出误报
+							return;
+						}
+						if (window._modemRedialTimer) {
+							clearInterval(window._modemRedialTimer);
+							window._modemRedialTimer = null;
+						}
+						if (btn) {
+							btn.disabled = false;
+							btn.innerText = '⚡ 立即重拨换IP';
+						}
+						ui.addNotification(null, E('p', '启动重拨任务失败: ' + (err.message || err)));
+					});
 				});
 			});
 		};

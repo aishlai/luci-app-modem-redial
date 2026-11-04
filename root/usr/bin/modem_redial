@@ -1,3 +1,28 @@
 #!/bin/sh
 # 华为/联通光猫 V271-20 自动重拨快捷调用命令与参数透传
+
+PID_FILE="/tmp/run/modem_redial.pid"
+
+if [ "$1" = "--start" ]; then
+    shift
+    # 若重拨进程已经在运行中，直接返回避免重复触发
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            echo "ALREADY_RUNNING"
+            exit 0
+        fi
+    fi
+
+    # 清空并预热日志，确保文件存在且有初始内容
+    mkdir -p /tmp/log /tmp/run
+    echo "[*] 正在启动后台守护重拨换IP任务..." > /tmp/log/modem_redial.log
+
+    # 彻底关闭 stdin/stdout/stderr 并转入后台，使调用者 (rpcd) 立即返回，根除前端 XHR 30s 超时
+    (python3 /usr/bin/modem_redial.py "$@") </dev/null >/dev/null 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "STARTED"
+    exit 0
+fi
+
 exec python3 /usr/bin/modem_redial.py "$@"

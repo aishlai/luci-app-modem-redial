@@ -74,7 +74,7 @@ def daemonize(log_file: str):
     """
     标准 Unix 双 fork 守护进程化
     彻底切断与父进程 (rpcd / cgi-io) 的会话和所有管道连接，
-    使 rpcd / ubus / HTTP 请求能够在 20ms 内立即返回，绝不阻塞后端！
+    使 rpcd / ubus / HTTP 请求能够在毫秒级立即返回，绝不阻塞后端！
     """
     # 写入初始行，确保日志文件永远不为 0 字节 (避免 rpcd file read 报 NoData 错误)
     if log_file:
@@ -92,27 +92,27 @@ def daemonize(log_file: str):
         if pid > 0:
             # 第一次 fork 的父进程直接向 stdout 打印 STARTED 并退出，通知前端任务已启动
             print("STARTED", flush=True)
-            sys.exit(0)
+            sys.stdout.flush()
+            os._exit(0)
     except OSError as e:
         sys.stderr.write(f"Fork #1 failed: {e}\n")
-        sys.exit(1)
+        os._exit(1)
 
     os.setsid()
 
     try:
         pid = os.fork()
         if pid > 0:
-            sys.exit(0)
+            os._exit(0)
     except OSError as e:
         sys.stderr.write(f"Fork #2 failed: {e}\n")
-        sys.exit(1)
+        os._exit(1)
 
     # 孙进程 (真正的独立后台守护任务)
     sys.stdout.flush()
     sys.stderr.flush()
 
     # 关闭从 rpcd 继承的所有多余文件描述符 (0 到 1024)
-    # 这一步至关重要！如果不关闭多余的 rpcd 管道描述符，rpcd 会永久等待管道 EOF 导致 30 秒超时！
     for fd in range(0, 1024):
         try:
             os.close(fd)
@@ -123,6 +123,11 @@ def daemonize(log_file: str):
     os.dup2(devnull_fd, 0)
     os.dup2(devnull_fd, 1)
     os.dup2(devnull_fd, 2)
+    if devnull_fd > 2:
+        try:
+            os.close(devnull_fd)
+        except OSError:
+            pass
 
 
 def log(msg: str, log_file: str = None):
@@ -584,8 +589,8 @@ def main():
         sys.exit(0)
 
     if not args.url or not args.user or not args.password:
+        log("[!] 光猫后台地址、登录账号或密码未配置，请先在后台设置中保存！", args.logfile)
         if args.start:
-            log("[!] 光猫后台地址、登录账号或密码未配置，请先在后台设置中保存！", args.logfile)
             print("NOT_CONFIGURED")
             sys.exit(1)
         print("\n" + "=" * 70)
