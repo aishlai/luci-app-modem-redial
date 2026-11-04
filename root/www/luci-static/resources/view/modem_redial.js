@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.3.1';
+var PLUGIN_VERSION = 'v1.3.2';
 
 return view.extend({
 	load: function() {
@@ -689,6 +689,9 @@ return view.extend({
 
 		// 测试 Ntfy 消息通知
 		window.testNtfyNotification = function() {
+			if (window._isTestingNtfy) return;
+			window._isTestingNtfy = true;
+
 			var btn = document.getElementById('btn_test_ntfy');
 			var tip = document.getElementById('test_ntfy_tip');
 			if (btn) {
@@ -698,6 +701,7 @@ return view.extend({
 			if (tip) tip.innerHTML = '';
 
 			fs.exec('/usr/bin/modem_redial', ['--test-ntfy']).then(function(res) {
+				window._isTestingNtfy = false;
 				if (btn) {
 					btn.disabled = false;
 					btn.innerText = '🔔 发送测试通知';
@@ -717,6 +721,7 @@ return view.extend({
 					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;font-weight:600;">❌ 发送失败: ' + (info.error || '未知错误') + '</span>';
 				}
 			}).catch(function(err) {
+				window._isTestingNtfy = false;
 				if (btn) {
 					btn.disabled = false;
 					btn.innerText = '🔔 发送测试通知';
@@ -724,16 +729,6 @@ return view.extend({
 				if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ 请求出错: ' + (err.message || err) + '</span>';
 			});
 		};
-
-		document.addEventListener('click', function(ev) {
-			if (ev.target && ev.target.id === 'btn_refresh_qos_log') {
-				window.refreshQosLog();
-			} else if (ev.target && ev.target.id === 'btn_clear_qos_log') {
-				window.clearQosLog();
-			} else if (ev.target && ev.target.id === 'btn_test_ntfy') {
-				window.testNtfyNotification();
-			}
-		});
 
 		// 若加载时检测到已有重拨任务在运行，自动开启日志轮询
 		try {
