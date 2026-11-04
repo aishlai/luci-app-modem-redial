@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.1.3';
+var PLUGIN_VERSION = 'v1.1.4';
 
 return view.extend({
 	load: function() {
@@ -379,56 +379,83 @@ return view.extend({
 			});
 		};
 
-		// 执行一键升级
+		// 执行一键升级 (采用后台异步守护 + 实时状态轮询机制，彻底根除 XHR 30s 超时)
 		window.doPluginUpdate = function(downloadUrl, newVersion) {
+			var msgEl = E('p', { 'style': 'font-size:13px;color:#666;margin-top:8px;' }, _('正在启动后台升级程序...'));
+
 			ui.showModal(_('正在升级插件'), [
 				E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
-					E('div', { 'style': 'font-size:32px;margin-bottom:12px;' }, '⏳'),
-					E('p', { 'style': 'font-size:15px;font-weight:600;' }, [
-						_('正在下载并安装最新版本 ') + (newVersion || '') + ' ...'
+					E('div', { 'style': 'font-size:36px;margin-bottom:12px;' }, '⏳'),
+					E('p', { 'style': 'font-size:16px;font-weight:600;' }, [
+						_('正在升级至版本 ') + (newVersion || '')
 					]),
-					E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('正在从 GitHub 下载最新 IPK 安装包并执行覆盖安装，请稍候...'))
+					msgEl,
+					E('div', { 'style': 'margin-top:15px;color:#aaa;font-size:12px;' }, _('升级期间将自动备份并恢复您的光猫配置，请稍候...'))
 				])
 			]);
 
-			var params = ['--do-update'];
+			var params = ['--start-update'];
 			if (downloadUrl) {
 				params.push('--pkg-url');
 				params.push(downloadUrl);
 			}
 
+			// 1. 毫秒级触发后台任务，绝不阻塞 XHR
 			fs.exec('/usr/bin/modem_redial', params).then(function(res) {
-				var raw = (res && res.stdout) ? res.stdout.trim() : '';
-				var ret = {};
-				try {
-					ret = JSON.parse(raw || '{}');
-				} catch(e) {
-					ret = { success: false, error: raw };
-				}
+				var pollCount = 0;
+				var maxPolls = 60; // 最多轮询 60 秒
 
-				if (ret.success) {
-					ui.showModal(_('升级成功'), [
-						E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
-							E('div', { 'style': 'font-size:32px;margin-bottom:12px;' }, '🎉'),
-							E('p', { 'style': 'font-size:16px;font-weight:600;color:#28a745;' }, _('插件已成功升级至最新版本！')),
-							E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('页面将在 3 秒后自动刷新...'))
-						])
-					]);
-					setTimeout(function() {
-						location.reload();
-					}, 2800);
-				} else {
-					ui.showModal(_('升级失败'), [
-						E('div', { 'style': 'padding:15px 5px;' }, [
-							E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (ret.error || _('升级过程中发生错误'))),
-							E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
-								E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
-							])
-						])
-					]);
-				}
+				var pollTimer = setInterval(function() {
+					pollCount++;
+
+					L.resolveDefault(fs.read('/tmp/log/modem_redial_update.status'), '').then(function(raw) {
+						var st = {};
+						try {
+							st = JSON.parse(raw || '{}');
+						} catch(e) {}
+
+						if (st.message && msgEl) {
+							msgEl.innerText = st.message;
+						}
+
+						if (st.stage === 'success' || st.success === true) {
+							clearInterval(pollTimer);
+							ui.showModal(_('升级成功'), [
+								E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
+									E('div', { 'style': 'font-size:36px;margin-bottom:12px;' }, '🎉'),
+									E('p', { 'style': 'font-size:16px;font-weight:600;color:#28a745;' }, _('插件已成功升级至最新版本！')),
+									E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('页面将在 2.5 秒后自动刷新...'))
+								])
+							]);
+							setTimeout(function() {
+								location.reload();
+							}, 2500);
+						} else if (st.stage === 'error' || st.success === false) {
+							clearInterval(pollTimer);
+							ui.showModal(_('升级失败'), [
+								E('div', { 'style': 'padding:15px 5px;' }, [
+									E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (st.error || st.message || _('升级过程中发生错误'))),
+									E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+										E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+									])
+								])
+							]);
+						} else if (pollCount >= maxPolls) {
+							clearInterval(pollTimer);
+							ui.showModal(_('升级等待超时'), [
+								E('div', { 'style': 'padding:15px 5px;' }, [
+									E('p', { 'style': 'color:#e6a23c;font-size:14px;' }, '⚠️ 升级等待时间较长，后台可能仍在安装中，请刷新页面查看最新版本状态。'),
+									E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+										E('button', { 'class': 'btn btn-primary', 'click': function() { location.reload(); } }, _('刷新页面')),
+										E('button', { 'class': 'btn', 'click': ui.hideModal, 'style': 'margin-left:8px;' }, _('关闭'))
+									])
+								])
+							]);
+						}
+					});
+				}, 1000);
 			}).catch(function(err) {
-				ui.showModal(_('升级发生异常'), [
+				ui.showModal(_('启动升级异常'), [
 					E('div', { 'style': 'padding:15px 5px;' }, [
 						E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
 						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [

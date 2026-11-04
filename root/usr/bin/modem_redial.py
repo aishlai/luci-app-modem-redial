@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.1.3-1"
+__version__ = "1.1.4-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -678,14 +678,38 @@ def check_github_update() -> dict:
     }
 
 
+UPDATE_STATUS_FILE = "/tmp/log/modem_redial_update.status"
+
+
+def set_update_status(stage: str, message: str, success: bool = None, error: str = None):
+    """记录升级进度状态至临时文件，供前端异步轮询展示"""
+    try:
+        os.makedirs("/tmp/log", exist_ok=True)
+        data = {
+            "stage": stage,
+            "message": message,
+            "success": success,
+            "error": error,
+            "time": int(time.time())
+        }
+        with open(UPDATE_STATUS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def do_github_update(download_url: str = None) -> dict:
     """下载最新 IPK 并执行 opkg 重装升级，严格保护用户现有配置"""
+    set_update_status("downloading", "正在准备升级安装包...")
+
     if not download_url:
         info = check_github_update()
         if not info.get("success") or not info.get("download_url"):
+            err_msg = info.get("error") or "未获取到最新安装包下载地址"
+            set_update_status("error", err_msg, success=False, error=err_msg)
             return {
                 "success": False,
-                "error": info.get("error") or "未获取到最新安装包下载地址"
+                "error": err_msg
             }
         download_url = info["download_url"]
 
@@ -708,10 +732,13 @@ def do_github_update(download_url: str = None) -> dict:
         except Exception:
             pass
 
+    # 优先使用国内高速加速镜像，将直接访问放在最后；单次超时设为 8 秒 (18KB 安装包毫秒级可下载完)
+    set_update_status("downloading", "正在从加速镜像下载最新安装包...")
     download_candidates = [
-        download_url,
         f"https://ghfast.top/{download_url}",
-        f"https://mirror.ghproxy.com/{download_url}"
+        f"https://mirror.ghproxy.com/{download_url}",
+        f"https://ghproxy.net/{download_url}",
+        download_url
     ]
 
     import ssl
@@ -725,7 +752,7 @@ def do_github_update(download_url: str = None) -> dict:
     for d_url in download_candidates:
         try:
             req = urllib.request.Request(d_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenWrt-Modem-Redial-Updater"})
-            with urllib.request.urlopen(req, timeout=25, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
                 if resp.status == 200:
                     content = resp.read()
                     if len(content) > 1024:
@@ -738,12 +765,15 @@ def do_github_update(download_url: str = None) -> dict:
             continue
 
     if not downloaded or not os.path.exists(target_ipk):
+        err_msg = f"下载新版安装包失败: {last_err}"
+        set_update_status("error", err_msg, success=False, error=err_msg)
         return {
             "success": False,
-            "error": f"下载新版安装包失败: {last_err}"
+            "error": err_msg
         }
 
     # 执行 opkg 安装
+    set_update_status("installing", "安装包下载完成，正在执行覆盖安装与系统配置保护...")
     try:
         res = subprocess.run(
             ["opkg", "install", "--force-reinstall", target_ipk],
@@ -752,14 +782,18 @@ def do_github_update(download_url: str = None) -> dict:
             text=True
         )
         if res.returncode != 0:
+            err_msg = f"opkg 安装失败: {res.stderr or res.stdout}"
+            set_update_status("error", err_msg, success=False, error=err_msg)
             return {
                 "success": False,
-                "error": f"opkg 安装失败: {res.stderr or res.stdout}"
+                "error": err_msg
             }
     except Exception as e:
+        err_msg = f"执行 opkg 异常: {e}"
+        set_update_status("error", err_msg, success=False, error=err_msg)
         return {
             "success": False,
-            "error": f"执行 opkg 异常: {e}"
+            "error": err_msg
         }
     finally:
         # 强力恢复配置兜底：确保用户配置绝对不被安装包默认模板冲掉
@@ -789,6 +823,7 @@ def do_github_update(download_url: str = None) -> dict:
     except Exception:
         pass
 
+    set_update_status("success", "插件升级成功！", success=True)
     return {
         "success": True,
         "message": "插件升级成功！"
