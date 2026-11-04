@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-华为光猫自动重拨助手 (Huawei ONT Auto-Redial Assistant)
+北京联通华为光猫 V271-20 自动重拨助手 (Huawei V271-20 Auto-Redial Assistant)
 纯 Python 原生标准库实现，零第三方依赖，支持直接双击/执行或 CLI 传参。
 
 适用场景：
@@ -16,7 +16,7 @@
 # 请在此处填入你的光猫管理信息，保存后可直接执行: python3 redial_v271_20.py
 # 也可以保持为空，通过命令行参数传入 (--url, --password 等)
 # ==============================================================================
-MODEM_URL = ""                      # 光猫后台地址，例如: "http://192.168.1.1" 或 "http://192.168.50.1"
+MODEM_URL =""                      # 光猫后台地址，例如: "http://192.168.1.1" 或 "http://192.168.50.1"
 USERNAME = "user"                   # 光猫登录账号，通常为 "user" (无需超级密码)
 PASSWORD = ""                       # 光猫登录密码 (必填，光猫背标贴纸上的默认密码或自定义密码)
 WAN_NAME = "2_INTERNET_R_VID_3961"  # 目标 WAN 连接名称 (例如北京联通: 2_INTERNET_R_VID_3961)
@@ -418,7 +418,7 @@ def redial_wan(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="华为光猫自动重拨助手 (Huawei ONT Auto-Redial Assistant)")
+    parser = argparse.ArgumentParser(description="北京联通华为光猫 V271-20 自动重拨助手 (Huawei V271-20 Auto-Redial Assistant)")
     parser.add_argument("--url", default=MODEM_URL or "http://192.168.1.1", help="光猫后台管理地址 (默认读取头部 MODEM_URL 或 http://192.168.1.1)")
     parser.add_argument("--user", default=USERNAME or "user", help="登录账号 (默认读取头部 USERNAME 或 user)")
     parser.add_argument("--password", default=PASSWORD, help="光猫后台登录密码 (默认读取头部 PASSWORD)")

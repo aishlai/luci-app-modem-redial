@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-华为光猫自动重拨助手 (Huawei ONT Auto-Redial Assistant)
+北京联通华为光猫 V271-20 自动重拨助手 (Huawei V271-20 Auto-Redial Assistant)
 OpenWrt / LuCI 后端核心脚本 (纯原生标准库，支持 UCI 配置读取与 CLI 参数)
 """
 
@@ -552,7 +552,7 @@ def redial_wan(
 def main():
     uci_conf = load_uci_config()
 
-    parser = argparse.ArgumentParser(description="华为光猫自动重拨助手 (Huawei ONT Auto-Redial Assistant)")
+    parser = argparse.ArgumentParser(description="北京联通华为光猫 V271-20 自动重拨助手 (Huawei V271-20 Auto-Redial Assistant)")
     parser.add_argument("--url", default=uci_conf.get("router_url", ""), help="光猫地址")
     parser.add_argument("--user", default=uci_conf.get("username", ""), help="登录账号")
     parser.add_argument("--password", default=uci_conf.get("password", ""), help="登录密码")

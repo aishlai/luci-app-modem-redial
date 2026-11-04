@@ -67,7 +67,7 @@ Depends: python3
 Section: luci
 Architecture: all
 Maintainer: aishlai
-Description: LuCI Support for Huawei ONT Auto-Redial Assistant (光猫重拨助手)
+Description: LuCI Support for Beijing Unicom Huawei V271-20 ONT Auto-Redial Assistant (光猫重拨助手)
 '''.encode('utf-8')
 
     postinst_content = b'''#!/bin/sh

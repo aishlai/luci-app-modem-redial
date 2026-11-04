@@ -10,7 +10,7 @@
   <a href="https://github.com/aishlai/luci-app-modem-redial/releases"><img src="https://img.shields.io/github/v/release/aishlai/luci-app-modem-redial?style=flat-square&color=blueviolet" alt="GitHub Release"></a>
 </p>
 
-专为**华为光猫（如联通定制版 V271-20、HS8546、HN8145 等系列）**打造的 OpenWrt / iStoreOS 路由控制插件与自动化脚本。通过智能控制光猫后台切换拨号方式，实现**秒级自动化重新拨号换 IP**，一键摆脱运营商恶意的 **UDP QoS 丢包、限速与网络阻断**！
+专为**北京联通版本华为光猫 V271-20** 打造的 OpenWrt / iStoreOS 路由控制插件与自动化脚本。通过智能控制光猫后台切换拨号方式，实现**秒级自动化重新拨号换 IP**，一键摆脱运营商恶意的 **UDP QoS 丢包、限速与网络阻断**！
 
 ---
 
@@ -52,17 +52,11 @@
 
 ---
 
-## 📱 适配光猫型号
+## 📱 验证机型说明
 
-| 厂商 | 代表型号 | 适配情况 | 说明 |
-| :--- | :--- | :---: | :--- |
-| **华为 (Huawei)** | **V271-20** (联通定制版) | ⭐️ 原生完美支持 | 默认测试机型，支持普通 user 账号切换拨号方式 |
-| **华为 (Huawei)** | **HN8145V / HN8145X6** | ✅ 完美支持 | 华为统一 Web 架构光猫均可通用 |
-| **华为 (Huawei)** | **HS8546V5 / HS8546X6** | ✅ 完美支持 | 需在后台 WAN 配置中支持切换 Manual/AlwaysOn |
-| **华为 (Huawei)** | **星光 F50 系列** | ✅ 完美支持 | 采用相同 BBSP WAN 控制接口 |
-
-> [!TIP]
-> 只要你的光猫后台界面带有 `/html/bbsp/wan/wan.asp` 且允许修改 WAN 连接的“连接触发模式”（自动/手动），即可完美适用。
+> [!IMPORTANT]
+> **本插件仅在「北京联通版本 华为 V271-20」光猫上进行了实际测试与功能验证。**  
+> 其他地区或其他光猫型号暂未进行测试，请以实际设备为准。
 
 ---
 
