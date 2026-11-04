@@ -138,14 +138,29 @@ make package/luci-app-modem-redial/compile V=s
 
 ## 💻 独立 Python 脚本使用指南
 
-如果你不想安装 LuCI 插件，或者希望在群晖 NAS、PVE 宿主机、Docker 容器中通过定时任务调用，可以直接使用独立脚本 [`redial_v271_20.py`](redial_v271_20.py)：
+如果你不想安装 LuCI 插件，或者希望在群晖 NAS、PVE 宿主机、Docker 容器中通过定时任务调用，可以直接使用独立脚本 [`redial_v271_20.py`](redial_v271_20.py)。
 
-### 1. 查询当前公网 IP 与光猫状态
+### 方式 A：直接在脚本顶部填写配置（最简便）
+用任意文本编辑器打开 `redial_v271_20.py`，在开头的 **【用户配置区】** 填入你的光猫管理信息：
+```python
+MODEM_URL = "http://192.168.1.1"   # 你的光猫管理后台地址
+PASSWORD  = "你的光猫密码"          # 光猫背标贴纸上的管理密码
+```
+保存后，无需输入长串参数，直接双击或运行即可：
+```bash
+python3 redial_v271_20.py
+```
+> 若未填写任何配置直接运行，脚本会友好地打印出使用指南与参数提示，绝不会静默闪退或报错。
+
+### 方式 B：通过命令行参数直接运行
+也可以不修改脚本，直接通过命令行传参调用：
+
+#### 1. 查询当前公网 IP 与光猫状态
 ```bash
 python3 redial_v271_20.py --url http://192.168.1.1 --user user --password "你的光猫密码" --status
 ```
 
-### 2. 立即触发重新拨号换 IP
+#### 2. 立即触发重新拨号换 IP
 ```bash
 python3 redial_v271_20.py --url http://192.168.1.1 --user user --password "你的光猫密码" --wan 2_INTERNET_R_VID_3961 --delay 3
 ```
