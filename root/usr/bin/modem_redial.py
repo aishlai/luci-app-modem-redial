@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.1.0-1"
+__version__ = "1.1.1-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -784,11 +784,12 @@ def do_github_update(download_url: str = None) -> dict:
             except Exception:
                 pass
 
-    # 重载服务并清除 LuCI 缓存以确保新配置与视图生效
+    # 重载服务并清除 LuCI 缓存以确保新配置与视图生效 (使用 rpcd reload 保留用户会话，绝不执行 restart 导致用户退登)
     try:
         subprocess.run(["/etc/init.d/modem_redial", "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-f", "/tmp/luci-indexcache*"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-rf", "/tmp/luci-modulecache/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["/etc/init.d/rpcd", "reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
