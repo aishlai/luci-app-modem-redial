@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.1.2-1"
+__version__ = "1.1.3-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -617,17 +617,13 @@ def check_github_update() -> dict:
         download_url = None
         for a in data.get("assets", []):
             name = a.get("name", "")
-            if name.endswith(".ipk") and "latest" not in name:
+            if name.endswith(".ipk"):
                 download_url = a.get("browser_download_url")
                 break
-        if not download_url:
-            for a in data.get("assets", []):
-                if a.get("name", "").endswith(".ipk"):
-                    download_url = a.get("browser_download_url")
-                    break
 
         if not download_url:
-            download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/luci-app-modem-redial_latest_all.ipk"
+            clean_tag_rel = clean_tag if '-' in clean_tag else f"{clean_tag}-1"
+            download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/luci-app-modem-redial_{clean_tag_rel}_all.ipk"
 
         return {
             "success": True,

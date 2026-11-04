@@ -13,5 +13,7 @@ __pycache__/
 *$py.class
 *.log
 
-# Build temp
+# Build temp and artifacts
 build_tmp/
+bin/
+*.ipk

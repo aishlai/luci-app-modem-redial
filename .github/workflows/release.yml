@@ -35,6 +35,8 @@ jobs:
       - name: Build LuCI IPK Package
         run: |
           chmod +x ./build_ipk.sh
+          rm -rf bin
+          mkdir -p bin
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             bash ./build_ipk.sh "${{ github.ref_name }}"
           else

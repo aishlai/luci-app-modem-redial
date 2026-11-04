@@ -122,9 +122,16 @@ if os.path.exists(py_script_file):
 print(f"==> [版本识别] 来源: {tag_source} => 最终打包版本: {final_ver}")
 
 OUT_IPK = os.path.join(OUT_DIR, f'luci-app-modem-redial_{final_ver}_all.ipk')
-LATEST_IPK = os.path.join(OUT_DIR, 'luci-app-modem-redial_latest_all.ipk')
 
+# 确保输出目录干净，清理所有历史旧包与残留，只保留当前版本
 os.makedirs(OUT_DIR, exist_ok=True)
+for item in os.listdir(OUT_DIR):
+    if item.endswith('.ipk') or item.endswith('.txt'):
+        try:
+            os.remove(os.path.join(OUT_DIR, item))
+        except Exception:
+            pass
+
 shutil.rmtree(TMP_DIR, ignore_errors=True)
 os.makedirs(TMP_DIR, exist_ok=True)
 now = int(time.time())
@@ -243,8 +250,6 @@ with tarfile.open(OUT_IPK, 'w:gz', format=tarfile.GNU_FORMAT) as tar:
     ti.size = len(ctrl_bytes); ti.mode = 0o644; ti.mtime = now; ti.uid = 0; ti.gid = 0
     tar.addfile(ti, io.BytesIO(ctrl_bytes))
 
-shutil.copyfile(OUT_IPK, LATEST_IPK)
 shutil.rmtree(TMP_DIR, ignore_errors=True)
 print(f"==> [成功] IPK 安装包已生成至: {OUT_IPK}")
-print(f"==> [最新] 最新副本已更新至:   {LATEST_IPK}")
 PYEOF
