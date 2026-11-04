@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.2.0';
+var PLUGIN_VERSION = 'v1.2.1';
 
 return view.extend({
 	load: function() {
@@ -76,6 +76,7 @@ return view.extend({
 				'<button type="button" class="btn cbi-button-action" id="btn_check_update" onclick="window.checkPluginUpdate()">' +
 					'🚀 检查更新' +
 				'</button>' +
+				'<span id="check_update_tip" style="margin-left:10px;vertical-align:middle;display:inline-block;"></span>' +
 			'</div>' +
 			'<div style="margin-top:10px;">' +
 				'<div style="font-size:12px;color:#888;margin-bottom:4px;">实时执行日志 (最近输出):</div>' +
@@ -378,6 +379,8 @@ return view.extend({
 		// 检查 GitHub 最新版本
 		window.checkPluginUpdate = function() {
 			var btn = document.getElementById('btn_check_update');
+			var tip = document.getElementById('check_update_tip');
+			if (tip) tip.innerHTML = '';
 			if (btn) {
 				btn.disabled = true;
 				btn.innerText = '⏳ 正在检查最新版本...';
@@ -394,17 +397,27 @@ return view.extend({
 				try {
 					info = JSON.parse(raw || '{}');
 				} catch(e) {
-					ui.addNotification(null, E('p', '解析更新信息失败: ' + raw));
+					if (tip) {
+						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ 解析更新信息失败</span>';
+					} else {
+						ui.addNotification(null, E('p', '解析更新信息失败: ' + raw));
+					}
 					return;
 				}
 
 				if (!info.success) {
-					ui.addNotification(null, E('p', '检查更新失败: ' + (info.error || '无法连接 GitHub')));
+					if (tip) {
+						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + (info.error || '检查更新失败') + '</span>';
+					} else {
+						ui.addNotification(null, E('p', '检查更新失败: ' + (info.error || '无法连接 GitHub')));
+					}
 					return;
 				}
 
 				if (!info.has_update) {
-					ui.addNotification(null, E('p', '当前已是最新版本 (' + info.current_version + ')，暂无新版本。'), 'info');
+					if (tip) {
+						tip.innerHTML = '<span style="color:#2da44e;font-size:13px;font-weight:600;">✅ 已经是最新版</span>';
+					}
 					return;
 				}
 
@@ -444,7 +457,11 @@ return view.extend({
 					btn.disabled = false;
 					btn.innerText = '🚀 检查更新';
 				}
-				ui.addNotification(null, E('p', '请求检查更新出错: ' + (err.message || err)));
+				if (tip) {
+					tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ 检查失败: ' + (err.message || err) + '</span>';
+				} else {
+					ui.addNotification(null, E('p', '请求检查更新出错: ' + (err.message || err)));
+				}
 			});
 		};
 
