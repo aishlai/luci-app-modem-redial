@@ -1,0 +1,24 @@
+{
+	"admin/network/modem_redial": {
+		"title": "光猫重拨助手",
+		"order": 90,
+		"action": {
+			"type": "view",
+			"path": "modem_redial"
+		},
+		"depends": {
+			"acl": [ "luci-app-modem-redial" ]
+		}
+	},
+	"admin/services/modem_redial": {
+		"title": "光猫重拨助手",
+		"order": 90,
+		"action": {
+			"type": "view",
+			"path": "modem_redial"
+		},
+		"depends": {
+			"acl": [ "luci-app-modem-redial" ]
+		}
+	}
+}

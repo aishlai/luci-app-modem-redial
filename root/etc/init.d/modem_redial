@@ -1,0 +1,47 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2026 OpenWrt
+
+START=95
+USE_PROCD=1
+
+CRON_FILE="/etc/crontabs/root"
+TAG="# modem_redial_cron"
+
+start_service() {
+	local enabled cron_enabled cron_time
+	config_load modem_redial
+	config_get_bool enabled config enabled 0
+	config_get_bool cron_enabled config cron_enabled 0
+	config_get cron_time config cron_time "0 4 * * *"
+
+	# 清理旧的定时任务
+	mkdir -p /etc/crontabs
+	touch "$CRON_FILE"
+	sed -i "/$TAG/d" "$CRON_FILE" 2>/dev/null
+
+	# 若启用插件且开启定时任务，写入 crontabs
+	if [ "$enabled" = "1" ] && [ "$cron_enabled" = "1" ]; then
+		mkdir -p /tmp/log
+		echo "$cron_time /usr/bin/modem_redial >> /tmp/log/modem_redial.log 2>&1 $TAG" >> "$CRON_FILE"
+		/etc/init.d/cron restart 2>/dev/null
+	fi
+}
+
+stop_service() {
+	if [ -f "$CRON_FILE" ]; then
+		sed -i "/$TAG/d" "$CRON_FILE" 2>/dev/null
+		/etc/init.d/cron restart 2>/dev/null
+	fi
+}
+
+restart() {
+	stop_service
+	start_service
+}
+
+redial() {
+	/usr/bin/modem_redial
+}
+
+EXTRA_COMMANDS="redial"
+EXTRA_HELP="	redial	Immediately execute modem redial to change IP"

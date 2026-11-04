@@ -1,0 +1,3 @@
+#!/bin/sh
+# 华为/联通光猫 V271-20 自动重拨快捷调用命令与参数透传
+exec python3 /usr/bin/modem_redial.py "$@"

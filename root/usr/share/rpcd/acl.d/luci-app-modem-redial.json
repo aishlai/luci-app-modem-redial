@@ -1,0 +1,32 @@
+{
+	"luci-app-modem-redial": {
+		"description": "Grant access to modem_redial",
+		"read": {
+			"uci": [ "modem_redial" ],
+			"file": {
+				"/tmp/log/modem_redial.log": [ "read" ],
+				"/tmp/run/modem_redial.pid": [ "read" ],
+				"/usr/bin/modem_redial": [ "exec" ],
+				"/usr/bin/modem_redial *": [ "exec" ],
+				"/usr/bin/modem_redial.py": [ "exec" ],
+				"/usr/bin/modem_redial.py *": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "read", "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "modem_redial" ],
+			"file": {
+				"/tmp/log/modem_redial.log": [ "write" ],
+				"/usr/bin/modem_redial": [ "exec" ],
+				"/usr/bin/modem_redial *": [ "exec" ],
+				"/usr/bin/modem_redial.py": [ "exec" ],
+				"/usr/bin/modem_redial.py *": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "write", "exec" ]
+			}
+		}
+	}
+}
