@@ -570,6 +570,209 @@ def redial_wan(
         log("[*] 重拨换IP流程结束。", log_file)
 
 
+GITHUB_REPO = "aishlai/luci-app-modem-redial"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_VER_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
+
+
+def parse_version_tuple(v: str):
+    v = re.sub(r'^[vV]', '', str(v).strip())
+    parts = v.split('-', 1)
+    main_ver = parts[0]
+    rel = parts[1] if len(parts) > 1 else "0"
+    num_parts = [int(x) if x.isdigit() else 0 for x in re.split(r'[._]', main_ver)]
+    rel_num = int(rel) if rel.isdigit() else 0
+    return (num_parts, rel_num)
+
+
+def check_github_update() -> dict:
+    """检查 GitHub Releases 是否有新版本"""
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    current_ver = __version__
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenWrt-Modem-Redial-Updater",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    # 1. 优先尝试直接访问 GitHub Releases API
+    data = None
+    last_err = None
+    try:
+        req = urllib.request.Request(GITHUB_API_URL, headers=headers)
+        with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        last_err = e
+
+    if data and "tag_name" in data:
+        tag_name = data.get("tag_name", "").strip()
+        clean_tag = re.sub(r'^[vV]', '', tag_name)
+        has_update = parse_version_tuple(clean_tag) > parse_version_tuple(current_ver)
+
+        download_url = None
+        for a in data.get("assets", []):
+            name = a.get("name", "")
+            if name.endswith(".ipk") and "latest" not in name:
+                download_url = a.get("browser_download_url")
+                break
+        if not download_url:
+            for a in data.get("assets", []):
+                if a.get("name", "").endswith(".ipk"):
+                    download_url = a.get("browser_download_url")
+                    break
+
+        if not download_url:
+            download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/luci-app-modem-redial_latest_all.ipk"
+
+        return {
+            "success": True,
+            "current_version": f"v{current_ver.split('-')[0]}",
+            "latest_version": tag_name if tag_name.startswith("v") else f"v{tag_name}",
+            "has_update": has_update,
+            "download_url": download_url,
+            "release_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+            "release_notes": data.get("body", "").strip(),
+            "published_at": data.get("published_at", "")
+        }
+
+    # 2. 备选方案：若 API 访问受限（如 GFW 或速率限制），通过镜像查询 main 分支 VERSION 文件
+    raw_urls = [
+        GITHUB_RAW_VER_URL,
+        f"https://ghfast.top/{GITHUB_RAW_VER_URL}"
+    ]
+    remote_ver_str = None
+    for r_url in raw_urls:
+        try:
+            req = urllib.request.Request(r_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+                if resp.status == 200:
+                    remote_ver_str = resp.read().decode('utf-8').strip()
+                    if remote_ver_str:
+                        break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if remote_ver_str:
+        clean_tag = re.sub(r'^[vV]', '', remote_ver_str)
+        has_update = parse_version_tuple(clean_tag) > parse_version_tuple(current_ver)
+        main_tag = f"v{clean_tag.split('-')[0]}"
+        download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{main_tag}/luci-app-modem-redial_{clean_tag}_all.ipk"
+        return {
+            "success": True,
+            "current_version": f"v{current_ver.split('-')[0]}",
+            "latest_version": main_tag,
+            "has_update": has_update,
+            "download_url": download_url,
+            "release_url": f"https://github.com/{GITHUB_REPO}/releases/latest",
+            "release_notes": "通过镜像仓库检测到更新，建议升级。",
+            "published_at": ""
+        }
+
+    return {
+        "success": False,
+        "current_version": f"v{current_ver.split('-')[0]}",
+        "has_update": False,
+        "error": f"无法连接到 GitHub 检查更新 ({last_err})"
+    }
+
+
+def do_github_update(download_url: str = None) -> dict:
+    """下载最新 IPK 并执行 opkg 重装升级"""
+    if not download_url:
+        info = check_github_update()
+        if not info.get("success") or not info.get("download_url"):
+            return {
+                "success": False,
+                "error": info.get("error") or "未获取到最新安装包下载地址"
+            }
+        download_url = info["download_url"]
+
+    target_ipk = "/tmp/modem_redial_update.ipk"
+    if os.path.exists(target_ipk):
+        try:
+            os.remove(target_ipk)
+        except Exception:
+            pass
+
+    download_candidates = [
+        download_url,
+        f"https://ghfast.top/{download_url}",
+        f"https://mirror.ghproxy.com/{download_url}"
+    ]
+
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    downloaded = False
+    last_err = None
+
+    for d_url in download_candidates:
+        try:
+            req = urllib.request.Request(d_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenWrt-Modem-Redial-Updater"})
+            with urllib.request.urlopen(req, timeout=25, context=ctx) as resp:
+                if resp.status == 200:
+                    content = resp.read()
+                    if len(content) > 1024:
+                        with open(target_ipk, "wb") as f:
+                            f.write(content)
+                        downloaded = True
+                        break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if not downloaded or not os.path.exists(target_ipk):
+        return {
+            "success": False,
+            "error": f"下载新版安装包失败: {last_err}"
+        }
+
+    # 执行 opkg 安装
+    try:
+        res = subprocess.run(
+            ["opkg", "install", "--force-reinstall", target_ipk],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if res.returncode != 0:
+            return {
+                "success": False,
+                "error": f"opkg 安装失败: {res.stderr or res.stdout}"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"执行 opkg 异常: {e}"
+        }
+    finally:
+        if os.path.exists(target_ipk):
+            try:
+                os.remove(target_ipk)
+            except Exception:
+                pass
+
+    # 清除 LuCI 缓存以确保新视图生效
+    try:
+        subprocess.run(["rm", "-f", "/tmp/luci-indexcache*"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["rm", "-rf", "/tmp/luci-modulecache/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": "插件升级成功！"
+    }
+
+
 def main():
     uci_conf = load_uci_config()
 
@@ -584,8 +787,21 @@ def main():
     parser.add_argument("--status", action="store_true", help="查询当前状态并以 JSON 输出")
     parser.add_argument("--start", action="store_true", help="后台异步守护启动重拨 (避免阻塞调用者)")
     parser.add_argument("--cron", action="store_true", help="定时任务执行模式 (严格遵循 enabled/cron_enabled)")
+    parser.add_argument("--check-update", action="store_true", help="检查 GitHub 是否有新版本")
+    parser.add_argument("--do-update", action="store_true", help="一键下载并升级到最新版本")
+    parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
 
     args = parser.parse_args()
+
+    if args.check_update:
+        info = check_github_update()
+        print(json.dumps(info, ensure_ascii=False))
+        sys.exit(0)
+
+    if args.do_update:
+        res = do_github_update(args.pkg_url)
+        print(json.dumps(res, ensure_ascii=False))
+        sys.exit(0)
 
     if args.status:
         res = query_status_json(args.url, args.user, args.password, args.wan)

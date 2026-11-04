@@ -71,6 +71,10 @@ return view.extend({
 				'<button type="button" class="btn cbi-button-remove" onclick="window.clearModemLog()">' +
 					'🗑️ 清空日志' +
 				'</button>' +
+				'&nbsp;&nbsp;' +
+				'<button type="button" class="btn cbi-button-action" id="btn_check_update" onclick="window.checkPluginUpdate()">' +
+					'🚀 检查更新' +
+				'</button>' +
 			'</div>' +
 			'<div style="margin-top:10px;">' +
 				'<div style="font-size:12px;color:#888;margin-bottom:4px;">实时执行日志 (最近输出):</div>' +
@@ -299,6 +303,139 @@ return view.extend({
 			fs.write('/tmp/log/modem_redial.log', '\n').then(function() {
 				var box = document.getElementById('modem_redial_log');
 				if (box) box.value = '';
+			});
+		};
+
+		// 检查 GitHub 最新版本
+		window.checkPluginUpdate = function() {
+			var btn = document.getElementById('btn_check_update');
+			if (btn) {
+				btn.disabled = true;
+				btn.innerText = '⏳ 正在检查最新版本...';
+			}
+
+			fs.exec('/usr/bin/modem_redial', ['--check-update']).then(function(res) {
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '🚀 检查更新';
+				}
+
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var info = {};
+				try {
+					info = JSON.parse(raw || '{}');
+				} catch(e) {
+					ui.addNotification(null, E('p', '解析更新信息失败: ' + raw));
+					return;
+				}
+
+				if (!info.success) {
+					ui.addNotification(null, E('p', '检查更新失败: ' + (info.error || '无法连接 GitHub')));
+					return;
+				}
+
+				if (!info.has_update) {
+					ui.addNotification(null, E('p', '当前已是最新版本 (' + info.current_version + ')，暂无新版本。'), 'info');
+					return;
+				}
+
+				// 发现新版本，弹出优雅确认弹窗
+				var notesContent = info.release_notes ? [
+					E('div', { 'style': 'font-size:12px;color:#888;margin-top:10px;margin-bottom:4px;' }, _('更新说明:')),
+					E('pre', { 'style': 'background:#f7f7f7;border:1px solid #e8e8e8;padding:8px 12px;border-radius:4px;max-height:160px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;font-size:12px;' }, [ info.release_notes ])
+				] : [];
+
+				ui.showModal(_('发现新版本可用'), [
+					E('div', { 'style': 'padding:5px 0;' }, [
+						E('p', { 'style': 'font-size:15px;font-weight:600;margin-bottom:8px;' }, [
+							_('最新版本: '),
+							E('span', { 'style': 'color:#1890ff;' }, [ info.latest_version ]),
+							_(' (当前版本: ') + info.current_version + ')'
+						]),
+						E('div', {}, notesContent),
+						E('p', { 'style': 'color:#666;font-size:12px;margin-top:10px;' }, _('点击一键升级后，路由器将自动从 GitHub 下载并静默覆盖安装最新版本。')),
+						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+							E('button', {
+								'class': 'btn cbi-button-reset',
+								'click': ui.hideModal
+							}, _('稍后再说')),
+							' ',
+							E('button', {
+								'class': 'btn cbi-button-apply',
+								'click': function(ev) {
+									ui.hideModal();
+									window.doPluginUpdate(info.download_url, info.latest_version);
+								}
+							}, _('🚀 立即一键升级'))
+						])
+					])
+				]);
+			}).catch(function(err) {
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '🚀 检查更新';
+				}
+				ui.addNotification(null, E('p', '请求检查更新出错: ' + (err.message || err)));
+			});
+		};
+
+		// 执行一键升级
+		window.doPluginUpdate = function(downloadUrl, newVersion) {
+			ui.showModal(_('正在升级插件'), [
+				E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
+					E('div', { 'style': 'font-size:32px;margin-bottom:12px;' }, '⏳'),
+					E('p', { 'style': 'font-size:15px;font-weight:600;' }, [
+						_('正在下载并安装最新版本 ') + (newVersion || '') + ' ...'
+					]),
+					E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('正在从 GitHub 下载最新 IPK 安装包并执行覆盖安装，请稍候...'))
+				])
+			]);
+
+			var params = ['--do-update'];
+			if (downloadUrl) {
+				params.push('--pkg-url');
+				params.push(downloadUrl);
+			}
+
+			fs.exec('/usr/bin/modem_redial', params).then(function(res) {
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var ret = {};
+				try {
+					ret = JSON.parse(raw || '{}');
+				} catch(e) {
+					ret = { success: false, error: raw };
+				}
+
+				if (ret.success) {
+					ui.showModal(_('升级成功'), [
+						E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
+							E('div', { 'style': 'font-size:32px;margin-bottom:12px;' }, '🎉'),
+							E('p', { 'style': 'font-size:16px;font-weight:600;color:#28a745;' }, _('插件已成功升级至最新版本！')),
+							E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('页面将在 3 秒后自动刷新...'))
+						])
+					]);
+					setTimeout(function() {
+						location.reload();
+					}, 2800);
+				} else {
+					ui.showModal(_('升级失败'), [
+						E('div', { 'style': 'padding:15px 5px;' }, [
+							E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (ret.error || _('升级过程中发生错误'))),
+							E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+								E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+							])
+						])
+					]);
+				}
+			}).catch(function(err) {
+				ui.showModal(_('升级发生异常'), [
+					E('div', { 'style': 'padding:15px 5px;' }, [
+						E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
+						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+							E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+						])
+					])
+				]);
 			});
 		};
 

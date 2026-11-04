@@ -162,8 +162,7 @@ Description: LuCI Support for Beijing Unicom Huawei V271-20 ONT Auto-Redial Assi
     rm -f /tmp/luci-indexcache*
     rm -rf /tmp/luci-modulecache/
     /etc/init.d/modem_redial enable
-    /etc/init.d/rpcd restart 2>/dev/null || true
-    /etc/init.d/uhttpd restart 2>/dev/null || true
+    (sleep 1 && /etc/init.d/rpcd restart 2>/dev/null && /etc/init.d/uhttpd restart 2>/dev/null) >/dev/null 2>&1 &
 }
 exit 0
 '''
