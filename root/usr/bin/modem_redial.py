@@ -59,10 +59,24 @@ def is_redial_running() -> bool:
                 pid_str = f.read().strip()
             if pid_str:
                 pid = int(pid_str)
+                # 若 PID 就是自身，绝非冲突
+                if pid == os.getpid():
+                    return False
                 # 检查进程是否存在 (发信号 0)
                 os.kill(pid, 0)
+                # 校验进程命令行，防止残留的死 PID 恰好被系统其他无关进程复用
+                proc_cmd = f"/proc/{pid}/cmdline"
+                if os.path.exists(proc_cmd):
+                    try:
+                        with open(proc_cmd, "rb") as pf:
+                            cmd_bytes = pf.read()
+                        if b"modem_redial" not in cmd_bytes:
+                            remove_pid()
+                            return False
+                    except Exception:
+                        pass
                 return True
-        except ProcessLookupError:
+        except (ProcessLookupError, OSError):
             remove_pid()
             return False
         except Exception:

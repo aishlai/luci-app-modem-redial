@@ -9,8 +9,15 @@ if [ "$1" = "--start" ]; then
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE" 2>/dev/null)
         if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-            echo "ALREADY_RUNNING"
-            exit 0
+            # 进一步校验进程命令行，防止系统重启后 PID 恰好被其他无关进程复用
+            if [ -f "/proc/$PID/cmdline" ] && grep -qa "modem_redial" "/proc/$PID/cmdline" 2>/dev/null; then
+                echo "ALREADY_RUNNING"
+                exit 0
+            else
+                rm -f "$PID_FILE"
+            fi
+        else
+            rm -f "$PID_FILE"
         fi
     fi
 
@@ -19,8 +26,8 @@ if [ "$1" = "--start" ]; then
     echo "[*] 正在启动后台守护重拨换IP任务..." > /tmp/log/modem_redial.log
 
     # 彻底关闭 stdin/stdout/stderr 并转入后台，使调用者 (rpcd) 立即返回，根除前端 XHR 30s 超时
-    (python3 /usr/bin/modem_redial.py "$@") </dev/null >/dev/null 2>&1 &
-    echo $! > "$PID_FILE"
+    # 注意：PID 由 Python 主程序自行通过 write_pid() 记录，不在 Shell 提前写入，杜绝自身冲突
+    python3 /usr/bin/modem_redial.py "$@" </dev/null >/dev/null 2>&1 &
     echo "STARTED"
     exit 0
 fi

@@ -174,6 +174,7 @@ return view.extend({
 						if (logTxt.indexOf('重拨换IP流程结束') !== -1 ||
 							logTxt.indexOf('释放单用户会话锁') !== -1 ||
 							logTxt.indexOf('重新拨号成功') !== -1 ||
+							logTxt.indexOf('已有重拨任务在运行中') !== -1 ||
 							logTxt.indexOf('超时未检测到') !== -1 ||
 							logTxt.indexOf('登录失败') !== -1 ||
 							logTxt.indexOf('未找到') !== -1 ||
