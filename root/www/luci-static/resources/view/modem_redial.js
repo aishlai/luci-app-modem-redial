@@ -20,8 +20,8 @@ return view.extend({
 		m = new form.Map('modem_redial', _('光猫重拨助手') + ' (' + PLUGIN_VERSION + ')',
 			_('专为北京联通定制版华为光猫 V271-20 设计，通过控制光猫后台快速切换手动与自动拨号，实现秒级重新拨号换IP，有效解除运营商 UDP QoS 限速与网络阻断。'));
 
-		// 运行状态与操作卡片
-		s = m.section(form.NamedSection, 'config', 'modem_redial', _('运行状态与控制'));
+		// 运行状态与操作卡片 (无多余标题，直接平铺展示卡片与按钮)
+		s = m.section(form.NamedSection, 'config', 'modem_redial');
 		s.anonymous = true;
 
 		o = s.option(form.DummyValue, '_status');
