@@ -6,6 +6,18 @@
 OpenWrt / LuCI 后端核心脚本 (纯原生标准库，支持 UCI 配置读取与 CLI 参数)
 """
 
+# ==============================================================================
+# 【默认配置区】
+# 优先从 OpenWrt UCI 配置文件 (/etc/config/modem_redial) 读取。
+# 若脱离 LuCI 环境作为独立脚本运行，可直接在此处填入默认信息。
+# ==============================================================================
+DEFAULT_URL = ""                      # 光猫后台地址，如 "http://192.168.1.1" 或 "http://192.168.50.1"
+DEFAULT_USER = "user"                 # 光猫登录账号，通常为 "user"
+DEFAULT_PASS = ""                     # 光猫登录密码 (光猫背标贴纸默认密码或自定义密码)
+DEFAULT_WAN = "2_INTERNET_R_VID_3961" # 目标 WAN 连接名称 (例如北京联通: 2_INTERNET_R_VID_3961)
+DEFAULT_DELAY = 3                     # 切换为手动拨号后的下线等待秒数 (默认 3 秒)
+# ==============================================================================
+
 import argparse
 import base64
 import http.cookiejar
@@ -134,11 +146,11 @@ def load_uci_config() -> dict:
     """读取 OpenWrt UCI 配置 (若无 uci 命令则尝试直接解析配置文件)"""
     config = {
         "enabled": "0",
-        "router_url": "",
-        "username": "",
-        "password": "",
-        "wan_name": "2_INTERNET_R_VID_3961",
-        "pause_seconds": "3",
+        "router_url": DEFAULT_URL,
+        "username": DEFAULT_USER,
+        "password": DEFAULT_PASS,
+        "wan_name": DEFAULT_WAN,
+        "pause_seconds": str(DEFAULT_DELAY),
         "log_file": "/tmp/log/modem_redial.log"
     }
 
@@ -576,7 +588,17 @@ def main():
             log("[!] 光猫后台地址、登录账号或密码未配置，请先在后台设置中保存！", args.logfile)
             print("NOT_CONFIGURED")
             sys.exit(1)
-        log("[!] 光猫后台地址、登录账号或密码未配置，请先在后台设置中保存！", args.logfile)
+        print("\n" + "=" * 70)
+        print("  [!] 提示: 未检测到光猫配置信息！")
+        print("-" * 70)
+        print("  本插件需要光猫登录信息才能正常运行，您可以通过以下方式配置:\n")
+        print("  【方式一：在 OpenWrt 网页后台配置 (最推荐)】")
+        print("    登录路由器网页，打开【网络】或【服务】->【光猫重拨助手】填写并保存配置。\n")
+        print("  【方式二：通过命令行参数直接运行】")
+        print('    modem_redial --url http://192.168.1.1 --password "您的光猫密码"\n')
+        print("  【方式三：编辑脚本头部默认参数】")
+        print("    在 /usr/bin/modem_redial.py 顶部的【默认配置区】填写您的信息。")
+        print("=" * 70 + "\n")
         sys.exit(1)
 
     # 若指定了 --start，执行彻底脱离父进程的 Unix 双 fork 守护进程化
