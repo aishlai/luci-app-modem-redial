@@ -683,7 +683,7 @@ def check_github_update() -> dict:
 
 
 def do_github_update(download_url: str = None) -> dict:
-    """下载最新 IPK 并执行 opkg 重装升级"""
+    """下载最新 IPK 并执行 opkg 重装升级，严格保护用户现有配置"""
     if not download_url:
         info = check_github_update()
         if not info.get("success") or not info.get("download_url"):
@@ -692,6 +692,18 @@ def do_github_update(download_url: str = None) -> dict:
                 "error": info.get("error") or "未获取到最新安装包下载地址"
             }
         download_url = info["download_url"]
+
+    # 升级前备份现有用户配置文件 (内存级与临时文件级双重备份)
+    cfg_file = "/etc/config/modem_redial"
+    cfg_backup_content = None
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg_backup_content = f.read()
+            with open("/tmp/_modem_redial_cfg.bak", "w", encoding="utf-8") as f:
+                f.write(cfg_backup_content)
+        except Exception:
+            pass
 
     target_ipk = "/tmp/modem_redial_update.ipk"
     if os.path.exists(target_ipk):
@@ -754,14 +766,27 @@ def do_github_update(download_url: str = None) -> dict:
             "error": f"执行 opkg 异常: {e}"
         }
     finally:
+        # 强力恢复配置兜底：确保用户配置绝对不被安装包默认模板冲掉
+        if cfg_backup_content:
+            try:
+                with open(cfg_file, "w", encoding="utf-8") as f:
+                    f.write(cfg_backup_content)
+            except Exception:
+                pass
+        if os.path.exists("/tmp/_modem_redial_cfg.bak"):
+            try:
+                os.remove("/tmp/_modem_redial_cfg.bak")
+            except Exception:
+                pass
         if os.path.exists(target_ipk):
             try:
                 os.remove(target_ipk)
             except Exception:
                 pass
 
-    # 清除 LuCI 缓存以确保新视图生效
+    # 重载服务并清除 LuCI 缓存以确保新配置与视图生效
     try:
+        subprocess.run(["/etc/init.d/modem_redial", "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-f", "/tmp/luci-indexcache*"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-rf", "/tmp/luci-modulecache/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:

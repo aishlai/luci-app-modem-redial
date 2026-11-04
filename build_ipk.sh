@@ -154,18 +154,35 @@ Maintainer: aishlai
 Description: LuCI Support for Beijing Unicom Huawei V271-20 ONT Auto-Redial Assistant (光猫重拨助手)
 '''.encode('utf-8')
 
-    postinst_content = b'''#!/bin/sh
+    conffiles_content = b'/etc/config/modem_redial\n'
+
+    preinst_content = '''#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] || {
+    # 升级前备份已有配置，绝不丢失用户填写的光猫地址、密码与启用状态
+    if [ -f /etc/config/modem_redial ]; then
+        cp -f /etc/config/modem_redial /tmp/_modem_redial_cfg.bak 2>/dev/null || true
+    fi
+}
+exit 0
+'''.encode('utf-8')
+
+    postinst_content = '''#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] || {
+    # 升级后恢复原有的用户配置
+    if [ -f /tmp/_modem_redial_cfg.bak ]; then
+        mv -f /tmp/_modem_redial_cfg.bak /etc/config/modem_redial 2>/dev/null || true
+    fi
     rm -f /usr/lib/lua/luci/controller/modem_redial.lua \
           /usr/lib/lua/luci/model/cbi/modem_redial.lua \
           /usr/lib/lua/luci/view/modem_redial/status.htm 2>/dev/null || true
     rm -f /tmp/luci-indexcache*
     rm -rf /tmp/luci-modulecache/
     /etc/init.d/modem_redial enable
+    /etc/init.d/modem_redial restart 2>/dev/null || true
     (sleep 1 && /etc/init.d/rpcd restart 2>/dev/null && /etc/init.d/uhttpd restart 2>/dev/null) >/dev/null 2>&1 &
 }
 exit 0
-'''
+'''.encode('utf-8')
     prerm_content = b'''#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] || {
     /etc/init.d/modem_redial stop
@@ -177,6 +194,8 @@ exit 0
 exit 0
 '''
     add_mem_file('./control', control_content, 0o644)
+    add_mem_file('./conffiles', conffiles_content, 0o644)
+    add_mem_file('./preinst', preinst_content, 0o755)
     add_mem_file('./postinst', postinst_content, 0o755)
     add_mem_file('./prerm', prerm_content, 0o755)
 
