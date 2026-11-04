@@ -7,16 +7,6 @@ if [ ! -f "$PY_SCRIPT" ]; then
     PY_SCRIPT="/usr/bin/modem_redial.py"
 fi
 
-if [ "$1" = "--start-update" ]; then
-    shift
-    mkdir -p /tmp/log /tmp/run
-    echo '{"stage":"downloading","message":"正在启动升级程序...","time":'$(date +%s)'}' > /tmp/log/modem_redial_update.status
-    # 彻底脱离父进程转入后台执行升级，避免触发前端 XHR 30s 超时
-    python3 "$PY_SCRIPT" --do-update "$@" </dev/null >/dev/null 2>&1 &
-    echo '{"success":true,"started":true}'
-    exit 0
-fi
-
 if [ "$1" = "--start" ]; then
     shift
     # 若重拨进程已经在运行中，直接返回避免重复触发

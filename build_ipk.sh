@@ -186,7 +186,6 @@ exit 0
     rm -rf /tmp/luci-modulecache/
     /etc/init.d/modem_redial enable
     /etc/init.d/modem_redial restart 2>/dev/null || true
-    /etc/init.d/rpcd reload 2>/dev/null || true
 }
 exit 0
 '''.encode('utf-8')
