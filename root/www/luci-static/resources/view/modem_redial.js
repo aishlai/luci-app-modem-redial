@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.1.7';
+var PLUGIN_VERSION = 'v1.1.8';
 
 return view.extend({
 	load: function() {
@@ -132,6 +132,51 @@ return view.extend({
 		o.depends('cron_enabled', '1');
 		o.default = '0 4 * * *';
 		o.description = _('标准 Crontab 5位表达式，例如：<code>0 4 * * *</code> (每天凌晨4点重拨换IP)；<code>0 */6 * * *</code> (每6小时重拨一次)');
+
+		// UDP 连通性监测与 QoS 自动重拨
+		s = m.section(form.NamedSection, 'config', 'modem_redial', _('UDP 连通性监测与 QoS 自动重拨'));
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'udp_watchdog_enabled', _('启用 UDP 连通性监测'));
+		o.default = '0';
+		o.rmempty = false;
+		o.description = _('后台定期测试多个可靠公共节点的 UDP 双向通讯。当全部目标 UDP 均无法连通（疑似被运营商 QoS 限制/断流）时，自动触发光猫重拨换 IP。');
+
+		o = s.option(form.Value, 'udp_check_interval', _('检测间隔时间 (秒)'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.datatype = 'uinteger';
+		o.default = '60';
+		o.placeholder = '60';
+		o.description = _('每隔多少秒执行一次 UDP 连通性检测，默认 60 秒（推荐 60 ~ 300 秒）。');
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'udp_fail_threshold', _('连续失败重拨阈值'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.datatype = 'uinteger';
+		o.default = '2';
+		o.placeholder = '2';
+		o.description = _('连续多少次检测全部目标均不通时才触发重拨，避免偶发网络抖动误触发，默认 2 次。');
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'udp_cooldown', _('重拨后冷却时间 (秒)'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.datatype = 'uinteger';
+		o.default = '180';
+		o.placeholder = '180';
+		o.description = _('触发重拨换 IP 成功后，暂停检测的冷却时间，给新网络足够的稳定时间，默认 180 秒。');
+		o.rmempty = false;
+
+		o = s.option(form.DynamicList, 'udp_targets', _('UDP 检测目标列表'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.placeholder = '223.5.5.5:53';
+		o.description = _('支持格式为 <code>IP/域名:端口</code>，自动识别常见协议（53: DNS, 3478: STUN, 123: NTP）。只要有任意一个目标通畅即视为网络正常。');
+
+		o = s.option(form.Button, '_btn_test_udp', _('连通性测试'));
+		o.inputtitle = _('⚡ 立即测试当前 UDP 连通性');
+		o.inputstyle = 'apply';
+		o.onclick = function() {
+			window.testCurrentUdp();
+		};
 
 		// 全局日志轮询函数
 		window.startLogPolling = function() {
@@ -376,6 +421,81 @@ return view.extend({
 					btn.innerText = '🚀 检查更新';
 				}
 				ui.addNotification(null, E('p', '请求检查更新出错: ' + (err.message || err)));
+			});
+		};
+
+		// 测试当前 UDP 连通性
+		window.testCurrentUdp = function() {
+			ui.showModal(_('正在测试 UDP 连通性'), [
+				E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
+					E('div', { 'style': 'font-size:36px;margin-bottom:12px;' }, '📡'),
+					E('p', { 'style': 'font-size:15px;font-weight:600;' }, _('正在向配置的目标节点发送双向 UDP 探测包...')),
+					E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('测试涵盖 DNS (53)、STUN (3478) 与 NTP (123) 协议，请稍候...'))
+				])
+			]);
+
+			fs.exec('/usr/bin/modem_redial', ['--test-udp']).then(function(res) {
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var data = {};
+				try {
+					data = JSON.parse(raw || '{}');
+				} catch(e) {
+					data = { all_failed: true, error: raw };
+				}
+
+				var results = data.results || [];
+				var rows = [];
+
+				for (var i = 0; i < results.length; i++) {
+					var item = results[i];
+					var statusBadge = item.ok
+						? E('span', { 'style': 'color:#28a745;font-weight:600;' }, '✅ ' + _('正常') + ' (' + item.rtt + 'ms)')
+						: E('span', { 'style': 'color:#dc3545;font-weight:600;' }, '❌ ' + _('不通') + ' (' + (item.msg || _('超时')) + ')');
+
+					rows.push(E('tr', {}, [
+						E('td', { 'style': 'font-weight:bold;' }, item.target),
+						E('td', {}, E('span', { 'class': 'badge' }, item.proto || 'UDP')),
+						E('td', {}, statusBadge)
+					]));
+				}
+
+				var summaryText = '';
+				var summaryColor = '';
+				if (data.all_failed) {
+					summaryText = _('⚠️ 全部 UDP 目标均不可达！当前网络极可能遭遇运营商 UDP QoS 限制或断流！');
+					summaryColor = '#dc3545';
+				} else {
+					summaryText = _('🎉 UDP 连通性正常！已收到目标节点的回包响应。');
+					summaryColor = '#28a745';
+				}
+
+				ui.showModal(_('UDP 连通性测试结果'), [
+					E('div', { 'style': 'padding:15px 5px;' }, [
+						E('p', { 'style': 'font-size:15px;font-weight:600;color:' + summaryColor + ';margin-bottom:12px;' }, summaryText),
+						E('table', { 'class': 'table', 'style': 'width:100%;font-size:13px;' }, [
+							E('thead', {}, [
+								E('tr', {}, [
+									E('th', {}, _('目标服务器')),
+									E('th', {}, _('协议')),
+									E('th', {}, _('测试结果'))
+								])
+							]),
+							E('tbody', {}, rows)
+						]),
+						E('div', { 'class': 'right', 'style': 'margin-top:18px;' }, [
+							E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+						])
+					])
+				]);
+			}).catch(function(err) {
+				ui.showModal(_('测试发生异常'), [
+					E('div', { 'style': 'padding:15px 5px;' }, [
+						E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
+						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+							E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+						])
+					])
+				]);
 			});
 		};
 

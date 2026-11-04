@@ -24,6 +24,8 @@ import http.cookiejar
 import json
 import os
 import re
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -31,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.1.7-1"
+__version__ = "1.1.8-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -163,6 +165,16 @@ def log(msg: str, log_file: str = None):
         print(formatted, flush=True)
 
 
+DEFAULT_UDP_TARGETS = [
+    "223.5.5.5:53",
+    "119.29.29.29:53",
+    "180.76.76.76:53",
+    "114.114.114.114:53",
+    "stun.miwifi.com:3478",
+    "ntp.aliyun.com:123"
+]
+
+
 def load_uci_config() -> dict:
     """读取 OpenWrt UCI 配置 (若无 uci 命令则尝试直接解析配置文件)"""
     config = {
@@ -172,21 +184,34 @@ def load_uci_config() -> dict:
         "password": DEFAULT_PASS,
         "wan_name": DEFAULT_WAN,
         "pause_seconds": str(DEFAULT_DELAY),
-        "log_file": "/tmp/log/modem_redial.log"
+        "log_file": "/tmp/log/modem_redial.log",
+        "udp_watchdog_enabled": "0",
+        "udp_check_interval": "60",
+        "udp_fail_threshold": "2",
+        "udp_cooldown": "180",
+        "udp_targets": list(DEFAULT_UDP_TARGETS)
     }
+
+    def parse_lines(lines):
+        targets_list = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith("option"):
+                parts = line.split(maxsplit=2)
+                if len(parts) >= 3:
+                    config[parts[1]] = parts[2].strip("'\"")
+            elif line.startswith("list"):
+                parts = line.split(maxsplit=2)
+                if len(parts) >= 3 and parts[1] == "udp_targets":
+                    targets_list.append(parts[2].strip("'\""))
+        if targets_list:
+            config["udp_targets"] = targets_list
 
     # 1. 优先使用 uci 命令导出
     try:
         res = subprocess.run(["uci", "-q", "export", "modem_redial"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.returncode == 0 and res.stdout:
-            for line in res.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("option"):
-                    parts = line.split(maxsplit=2)
-                    if len(parts) >= 3:
-                        key = parts[1]
-                        val = parts[2].strip("'\"")
-                        config[key] = val
+            parse_lines(res.stdout.splitlines())
             return config
     except Exception:
         pass
@@ -196,14 +221,7 @@ def load_uci_config() -> dict:
     if os.path.exists(config_file):
         try:
             with open(config_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("option"):
-                        parts = line.split(maxsplit=2)
-                        if len(parts) >= 3:
-                            key = parts[1]
-                            val = parts[2].strip("'\"")
-                            config[key] = val
+                parse_lines(f.readlines())
         except Exception:
             pass
 
@@ -829,6 +847,165 @@ def do_github_update(download_url: str = None) -> dict:
     }
 
 
+def probe_single_udp_target(target: str, timeout: float = 1.5) -> tuple:
+    """
+    单目标 UDP 双向探测：发送针对性协议请求并等待回包
+    返回: (ok: bool, rtt_ms: int, msg: str, proto: str)
+    """
+    try:
+        if ":" in target:
+            host, port_str = target.split(":", 1)
+            port = int(port_str.strip())
+            host = host.strip()
+        else:
+            host = target.strip()
+            port = 53
+    except Exception as e:
+        return False, 0, f"格式错误: {e}", "UNKNOWN"
+
+    if port == 53:
+        proto = "DNS"
+        tx_id = 0x4a4a
+        req = struct.pack(">HHHHHH", tx_id, 0x0100, 1, 0, 0, 0)
+        for part in "baidu.com".split("."):
+            req += bytes([len(part)]) + part.encode("ascii")
+        req += b"\x00" + struct.pack(">HH", 1, 1)
+        expect_check = lambda resp: len(resp) >= 12 and resp[:2] == struct.pack(">H", tx_id)
+    elif port in (3478, 3479):
+        proto = "STUN"
+        # RFC 5389 STUN Binding Request
+        req = struct.pack(">HHI", 0x0001, 0, 0x2112A442) + b"123456789012"
+        expect_check = lambda resp: len(resp) >= 20 and resp[:2] == b"\x01\x01"
+    elif port == 123:
+        proto = "NTP"
+        req = b"\x1b" + 47 * b"\0"
+        expect_check = lambda resp: len(resp) >= 48
+    else:
+        proto = f"UDP-{port}"
+        req = b"PING\n"
+        expect_check = lambda resp: len(resp) > 0
+
+    s = None
+    t0 = time.time()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        s.sendto(req, (host, port))
+        resp, _ = s.recvfrom(512)
+        rtt = int((time.time() - t0) * 1000)
+        if expect_check(resp):
+            return True, rtt, "正常响应", proto
+        return False, rtt, "回复内容异常", proto
+    except socket.timeout:
+        return False, 0, "超时无响应 (疑似阻断/丢包)", proto
+    except Exception as e:
+        return False, 0, str(e), proto
+    finally:
+        if s:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def check_all_udp_targets(targets: list, quick_exit: bool = False, timeout: float = 1.5) -> dict:
+    """
+    测试多个目标节点的 UDP 连通性
+    若 quick_exit=True，只要有一个成功就立刻返回（常用于后台轮询，耗时仅几毫秒）
+    """
+    if not targets:
+        targets = DEFAULT_UDP_TARGETS
+
+    results = []
+    any_ok = False
+    working_target = ""
+
+    for t in targets:
+        if not t or not str(t).strip():
+            continue
+        t = str(t).strip()
+        ok, rtt, msg, proto = probe_single_udp_target(t, timeout=timeout)
+        results.append({
+            "target": t,
+            "ok": ok,
+            "rtt": rtt,
+            "msg": msg,
+            "proto": proto
+        })
+        if ok:
+            any_ok = True
+            working_target = t
+            if quick_exit:
+                break
+
+    return {
+        "all_failed": not any_ok,
+        "any_ok": any_ok,
+        "working_target": working_target,
+        "results": results
+    }
+
+
+def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
+    """
+    后台守护进程：按指定间隔周期性探测 UDP 连通性，全不通时触发重拨换 IP
+    """
+    log("[*] [UDP Watchdog] 启动 UDP QoS 连通性监测守护进程...", log_file)
+    consecutive_fails = 0
+
+    while True:
+        try:
+            # 重新加载最新的 UCI 配置 (允许用户在后台保存后立即动态生效)
+            conf = load_uci_config()
+            if conf.get("enabled", "0") != "1" or conf.get("udp_watchdog_enabled", "0") != "1":
+                log("[*] [UDP Watchdog] 监测功能已关闭，守护进程退出。", log_file)
+                break
+
+            interval = int(conf.get("udp_check_interval", "60") or "60")
+            fail_threshold = int(conf.get("udp_fail_threshold", "2") or "2")
+            cooldown = int(conf.get("udp_cooldown", "180") or "180")
+            targets = conf.get("udp_targets") or DEFAULT_UDP_TARGETS
+            if isinstance(targets, str):
+                targets = [t.strip() for t in targets.split() if t.strip()]
+
+            # 执行 UDP 检测 (快速返回模式：只要有通的就立即通过)
+            res = check_all_udp_targets(targets, quick_exit=True, timeout=1.5)
+            if res["all_failed"]:
+                consecutive_fails += 1
+                log(f"[!] [UDP Watchdog] UDP 探测全部失败 ({consecutive_fails}/{fail_threshold})！疑似遭遇运营商 UDP QoS 阻断。", log_file)
+                if consecutive_fails >= fail_threshold:
+                    log("[!] [UDP Watchdog] 连续失败次数达到阈值，判定当前网络已被 QoS，立即触发光猫自动重拨换 IP！", log_file)
+                    consecutive_fails = 0
+
+                    if is_redial_running():
+                        log("[!] [UDP Watchdog] 已有重拨任务在运行，跳过本次触发。", log_file)
+                    else:
+                        redial_success = redial_wan(
+                            router_ip=conf.get("router_url"),
+                            username=conf.get("username"),
+                            password=conf.get("password"),
+                            target_wan_name=conf.get("wan_name", "2_INTERNET_R_VID_3961"),
+                            pause_seconds=int(conf.get("pause_seconds", "3") or "3"),
+                            log_file=log_file
+                        )
+                        if redial_success:
+                            log(f"[+] [UDP Watchdog] 重拨换 IP 成功！进入冷却时间 {cooldown} 秒...", log_file)
+                        else:
+                            log(f"[-] [UDP Watchdog] 重拨换 IP 失败，将在 {cooldown} 秒后重试监测...", log_file)
+
+                        time.sleep(max(10, cooldown))
+                        continue
+            else:
+                if consecutive_fails > 0:
+                    log(f"[+] [UDP Watchdog] UDP 连通性已恢复正常 (探测通过: {res.get('working_target', '')})。", log_file)
+                consecutive_fails = 0
+
+            time.sleep(max(5, interval))
+        except Exception as e:
+            log(f"[!] [UDP Watchdog] 监测运行异常: {e}", log_file)
+            time.sleep(30)
+
+
 def main():
     uci_conf = load_uci_config()
 
@@ -846,8 +1023,22 @@ def main():
     parser.add_argument("--check-update", action="store_true", help="检查 GitHub 是否有新版本")
     parser.add_argument("--do-update", action="store_true", help="一键下载并升级到最新版本")
     parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
+    parser.add_argument("--watchdog", action="store_true", help="运行 UDP 连通性监测后台守护进程")
+    parser.add_argument("--test-udp", action="store_true", help="测试当前网络环境下各目标 UDP 连通性并输出 JSON")
 
     args = parser.parse_args()
+
+    if args.test_udp:
+        targets = uci_conf.get("udp_targets") or DEFAULT_UDP_TARGETS
+        if isinstance(targets, str):
+            targets = [t.strip() for t in targets.split() if t.strip()]
+        res = check_all_udp_targets(targets, quick_exit=False, timeout=2.0)
+        print(json.dumps(res, ensure_ascii=False))
+        sys.exit(0)
+
+    if args.watchdog:
+        run_udp_watchdog(args.logfile)
+        sys.exit(0)
 
     if args.check_update:
         info = check_github_update()
