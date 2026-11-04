@@ -31,6 +31,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+__version__ = "1.0.5-1"
+
 PID_FILE = "/tmp/run/modem_redial.pid"
 
 
@@ -572,6 +574,7 @@ def main():
     uci_conf = load_uci_config()
 
     parser = argparse.ArgumentParser(description="北京联通华为光猫 V271-20 自动重拨助手 (Huawei V271-20 Auto-Redial Assistant)")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--url", default=uci_conf.get("router_url", ""), help="光猫地址")
     parser.add_argument("--user", default=uci_conf.get("username", ""), help="登录账号")
     parser.add_argument("--password", default=uci_conf.get("password", ""), help="登录密码")

@@ -4,6 +4,8 @@
 'require fs';
 'require ui';
 
+var PLUGIN_VERSION = 'v1.0.5';
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -15,7 +17,7 @@ return view.extend({
 	render: function(data) {
 		var m, s, o;
 
-		m = new form.Map('modem_redial', _('光猫重拨助手'),
+		m = new form.Map('modem_redial', _('光猫重拨助手') + ' (' + PLUGIN_VERSION + ')',
 			_('专为北京联通定制版华为光猫 V271-20 设计，通过控制光猫后台快速切换手动与自动拨号，实现秒级重新拨号换IP，有效解除运营商 UDP QoS 限速与网络阻断。'));
 
 		// 运行状态与操作卡片
@@ -39,7 +41,11 @@ return view.extend({
 
 			var escapedLog = (data[0] || '暂无执行日志').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-			return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;">' +
+			return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+					'<div style="font-size:14px;font-weight:600;color:#555;">光猫实时状态看板</div>' +
+					'<span style="font-size:12px;color:#1890ff;background:rgba(24,144,255,0.08);border:1px solid rgba(24,144,255,0.25);border-radius:12px;padding:2px 10px;font-weight:500;">插件版本: ' + PLUGIN_VERSION + '</span>' +
+				'</div>' +
+				'<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;">' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 14px;">' +
 					'<div style="font-size:12px;color:#888;">当前公网 IP</div>' +
 					'<div id="modem_current_ip" style="font-size:18px;font-weight:600;color:#333;">' + currentIP + '</div>' +

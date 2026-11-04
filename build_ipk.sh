@@ -94,6 +94,31 @@ if os.path.exists(MAKEFILE):
     except Exception:
         pass
 
+# 同步更新前端 LuCI JS 视图中的插件版本号 (显示为 v1.0.5)
+display_tag = f"v{pkg_ver}"
+js_view_file = os.path.join(DIR, 'root/www/luci-static/resources/view/modem_redial.js')
+if os.path.exists(js_view_file):
+    try:
+        with open(js_view_file, 'r', encoding='utf-8') as f:
+            j_content = f.read()
+        j_content = re.sub(r"var PLUGIN_VERSION = ['\"].*?['\"];", f"var PLUGIN_VERSION = '{display_tag}';", j_content)
+        with open(js_view_file, 'w', encoding='utf-8') as f:
+            f.write(j_content)
+    except Exception:
+        pass
+
+# 同步更新 Python 脚本中的 __version__
+py_script_file = os.path.join(DIR, 'root/usr/bin/modem_redial.py')
+if os.path.exists(py_script_file):
+    try:
+        with open(py_script_file, 'r', encoding='utf-8') as f:
+            p_content = f.read()
+        p_content = re.sub(r'__version__ = [\'"].*?[\'"]', f'__version__ = "{final_ver}"', p_content)
+        with open(py_script_file, 'w', encoding='utf-8') as f:
+            f.write(p_content)
+    except Exception:
+        pass
+
 print(f"==> [版本识别] 来源: {tag_source} => 最终打包版本: {final_ver}")
 
 OUT_IPK = os.path.join(OUT_DIR, f'luci-app-modem-redial_{final_ver}_all.ipk')
