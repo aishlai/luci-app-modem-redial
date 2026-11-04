@@ -4,13 +4,14 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.1.8';
+var PLUGIN_VERSION = 'v1.2.0';
 
 return view.extend({
 	load: function() {
 		return Promise.all([
 			L.resolveDefault(fs.read('/tmp/log/modem_redial.log'), ''),
-			L.resolveDefault(fs.exec('/usr/bin/modem_redial', ['--status']), {})
+			L.resolveDefault(fs.exec('/usr/bin/modem_redial', ['--status']), {}),
+			L.resolveDefault(fs.read('/etc/modem_redial_qos.log'), '')
 		]);
 	},
 
@@ -176,6 +177,29 @@ return view.extend({
 		o.inputstyle = 'apply';
 		o.onclick = function() {
 			window.testCurrentUdp();
+		};
+
+		o = s.option(form.Value, 'udp_log_file', _('QoS 独立持久化日志路径'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.default = '/etc/modem_redial_qos.log';
+		o.placeholder = '/etc/modem_redial_qos.log';
+		o.description = _('独立记录因 UDP QoS 阻断而触发的重拨日志。保存在 <code>/etc/</code> 目录下即使路由器重启也不会丢失。');
+		o.rmempty = false;
+
+		o = s.option(form.DummyValue, '_qos_log_view', _('QoS 触发重拨历史日志'));
+		o.depends('udp_watchdog_enabled', '1');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			var initLog = (data[2] || '');
+			return '<div style="margin-top:5px;">' +
+				'<textarea id="modem_redial_qos_log" class="cbi-input-textarea" style="width:100%;height:150px;font-family:monospace;font-size:12px;background:#f8f9fa;color:#333;line-height:1.4;box-sizing:border-box;resize:vertical;" readonly="readonly" placeholder="' + _('暂无 UDP QoS 触发重拨记录 (仅在全部目标检测失败并执行重拨换 IP 时记录)...') + '">' +
+				initLog +
+				'</textarea>' +
+				'<div style="margin-top:8px;text-align:right;">' +
+					'<button type="button" class="btn cbi-button cbi-button-action" id="btn_refresh_qos_log" onclick="window.refreshQosLog()" style="margin-right:8px;">🔄 ' + _('刷新 QoS 日志') + '</button>' +
+					'<button type="button" class="btn cbi-button cbi-button-reset" id="btn_clear_qos_log" onclick="window.clearQosLog()">🗑️ ' + _('清空 QoS 日志') + '</button>' +
+				'</div>' +
+			'</div>';
 		};
 
 		// 全局日志轮询函数
@@ -558,6 +582,38 @@ return view.extend({
 				]);
 			});
 		};
+
+		// 刷新与清空 QoS 日志
+		window.refreshQosLog = function() {
+			var qosBox = document.getElementById('modem_redial_qos_log');
+			if (!qosBox) return;
+			fs.exec('/usr/bin/modem_redial', ['--show-qos-log']).then(function(res) {
+				var txt = (res && typeof res.stdout === 'string') ? res.stdout : '';
+				qosBox.value = txt;
+				qosBox.scrollTop = qosBox.scrollHeight;
+			}).catch(function() {
+				L.resolveDefault(fs.read('/etc/modem_redial_qos.log'), '').then(function(txt) {
+					qosBox.value = txt || '';
+					qosBox.scrollTop = qosBox.scrollHeight;
+				});
+			});
+		};
+
+		window.clearQosLog = function() {
+			if (!confirm('确定要清空 UDP QoS 触发重拨历史日志吗？')) return;
+			fs.exec('/usr/bin/modem_redial', ['--clear-qos-log']).then(function() {
+				var qosBox = document.getElementById('modem_redial_qos_log');
+				if (qosBox) qosBox.value = '';
+			});
+		};
+
+		document.addEventListener('click', function(ev) {
+			if (ev.target && ev.target.id === 'btn_refresh_qos_log') {
+				window.refreshQosLog();
+			} else if (ev.target && ev.target.id === 'btn_clear_qos_log') {
+				window.clearQosLog();
+			}
+		});
 
 		// 若加载时检测到已有重拨任务在运行，自动开启日志轮询
 		try {

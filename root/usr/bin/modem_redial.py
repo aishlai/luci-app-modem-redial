@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.1.8-1"
+__version__ = "1.2.0-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -175,6 +175,9 @@ DEFAULT_UDP_TARGETS = [
 ]
 
 
+DEFAULT_QOS_LOG = "/etc/modem_redial_qos.log"
+
+
 def load_uci_config() -> dict:
     """读取 OpenWrt UCI 配置 (若无 uci 命令则尝试直接解析配置文件)"""
     config = {
@@ -189,6 +192,7 @@ def load_uci_config() -> dict:
         "udp_check_interval": "60",
         "udp_fail_threshold": "2",
         "udp_cooldown": "180",
+        "udp_log_file": DEFAULT_QOS_LOG,
         "udp_targets": list(DEFAULT_UDP_TARGETS)
     }
 
@@ -946,9 +950,47 @@ def check_all_udp_targets(targets: list, quick_exit: bool = False, timeout: floa
     }
 
 
+def log_qos_event(msg: str, qos_log_file: str = DEFAULT_QOS_LOG):
+    """
+    记录独立的持久化 UDP QoS 重拨触发日志
+    仅在检测全部失败且触发重拨换 IP 时记录，带有最大文件大小保护（自动轮转截断）
+    """
+    if not qos_log_file:
+        qos_log_file = DEFAULT_QOS_LOG
+
+    try:
+        log_dir = os.path.dirname(os.path.abspath(qos_log_file))
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception:
+        qos_log_file = "/tmp/log/modem_redial_qos.log"
+        os.makedirs("/tmp/log", exist_ok=True)
+
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{now_str}] {msg}\n"
+
+    try:
+        # 文件体积控制：若超过 64KB，保留最近 32KB，防止消耗 Flash
+        if os.path.exists(qos_log_file) and os.path.getsize(qos_log_file) > 65536:
+            try:
+                with open(qos_log_file, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                keep_content = content[-32768:]
+                with open(qos_log_file, "w", encoding="utf-8") as f:
+                    f.write("[--- 历史 QoS 日志已自动截断归档 ---]\n" + keep_content)
+            except Exception:
+                pass
+
+        with open(qos_log_file, "a", encoding="utf-8") as f:
+            f.write(entry)
+            f.flush()
+    except Exception as e:
+        sys.stderr.write(f"写入 QoS 日志失败: {e}\n")
+
+
 def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
     """
     后台守护进程：按指定间隔周期性探测 UDP 连通性，全不通时触发重拨换 IP
+    并在专属持久化日志中记录触发详情
     """
     log("[*] [UDP Watchdog] 启动 UDP QoS 连通性监测守护进程...", log_file)
     consecutive_fails = 0
@@ -980,6 +1022,18 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                     if is_redial_running():
                         log("[!] [UDP Watchdog] 已有重拨任务在运行，跳过本次触发。", log_file)
                     else:
+                        qos_log_path = conf.get("udp_log_file") or DEFAULT_QOS_LOG
+                        targets_desc = ", ".join(targets)
+
+                        # 记录进入独立持久化日志
+                        log_qos_event(
+                            f"[!] 检测到连续 {fail_threshold} 次所有 UDP 目标均不可达，判定遭遇运营商 UDP QoS 限制/阻断！\n"
+                            f"                      探测目标列表: {targets_desc}\n"
+                            f"                      正在执行光猫重新拨号以更换新 IP...",
+                            qos_log_file=qos_log_path
+                        )
+
+                        t_start = time.time()
                         redial_success = redial_wan(
                             router_ip=conf.get("router_url"),
                             username=conf.get("username"),
@@ -988,10 +1042,33 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                             pause_seconds=int(conf.get("pause_seconds", "3") or "3"),
                             log_file=log_file
                         )
+                        elapsed = int(time.time() - t_start)
+
                         if redial_success:
                             log(f"[+] [UDP Watchdog] 重拨换 IP 成功！进入冷却时间 {cooldown} 秒...", log_file)
+                            new_ip_desc = ""
+                            try:
+                                client = HuaweiONTClient(conf.get("router_url"), conf.get("username"), conf.get("password"))
+                                wan_info = client.get_wan_status()
+                                for w in wan_info.get("wan_list", []):
+                                    if w.get("name") == conf.get("wan_name", "2_INTERNET_R_VID_3961") and w.get("ip"):
+                                        new_ip_desc = f"，已成功获取新 IP: {w.get('ip')}"
+                                        break
+                            except Exception:
+                                pass
+
+                            log_qos_event(
+                                f"[+] 光猫自动重拨完成 (耗时 {elapsed} 秒){new_ip_desc}，进入冷却缓冲期 {cooldown} 秒。\n"
+                                f"--------------------------------------------------------------------------------",
+                                qos_log_file=qos_log_path
+                            )
                         else:
                             log(f"[-] [UDP Watchdog] 重拨换 IP 失败，将在 {cooldown} 秒后重试监测...", log_file)
+                            log_qos_event(
+                                f"[-] 光猫自动重拨换 IP 失败 (耗时 {elapsed} 秒)，请检查光猫登录密码或连接，将在 {cooldown} 秒后重试。\n"
+                                f"--------------------------------------------------------------------------------",
+                                qos_log_file=qos_log_path
+                            )
 
                         time.sleep(max(10, cooldown))
                         continue
@@ -1025,8 +1102,27 @@ def main():
     parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
     parser.add_argument("--watchdog", action="store_true", help="运行 UDP 连通性监测后台守护进程")
     parser.add_argument("--test-udp", action="store_true", help="测试当前网络环境下各目标 UDP 连通性并输出 JSON")
+    parser.add_argument("--clear-qos-log", action="store_true", help="清空 UDP QoS 独立持久化日志")
+    parser.add_argument("--show-qos-log", action="store_true", help="输出 UDP QoS 独立持久化日志内容")
 
     args = parser.parse_args()
+
+    if args.clear_qos_log:
+        qos_log_path = uci_conf.get("udp_log_file") or DEFAULT_QOS_LOG
+        try:
+            with open(qos_log_path, "w", encoding="utf-8") as f:
+                f.write("")
+            print("CLEARED")
+        except Exception as e:
+            print(f"ERROR: {e}")
+        sys.exit(0)
+
+    if args.show_qos_log:
+        qos_log_path = uci_conf.get("udp_log_file") or DEFAULT_QOS_LOG
+        if os.path.exists(qos_log_path):
+            with open(qos_log_path, "r", encoding="utf-8", errors="ignore") as f:
+                sys.stdout.write(f.read())
+        sys.exit(0)
 
     if args.test_udp:
         targets = uci_conf.get("udp_targets") or DEFAULT_UDP_TARGETS
