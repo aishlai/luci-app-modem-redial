@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.3.0-1"
+__version__ = "1.3.1-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -494,7 +494,7 @@ def send_ntfy_notification(
     conf: dict = None
 ) -> tuple:
     """
-    发送 Ntfy 消息通知 (POST JSON 格式至 ntfy.sh 或自建服务器)
+    发送 Ntfy 消息通知 (以纯 Markdown 格式作为 Body 发送至 ntfy.sh 或自建服务器)
     返回: (success: bool, msg: str)
     """
     if conf is None:
@@ -510,19 +510,30 @@ def send_ntfy_notification(
     if not topic:
         return False, "Ntfy Topic 为空，请先配置主题名称"
 
-    url = f"{server}/{topic}"
-    payload = {
-        "topic": topic,
+    # 1. 构造带查询参数的 URL (Query Parameters 格式传递元数据，兼容性最佳)
+    params = {
         "title": title,
-        "message": message,
-        "priority": priority,
-        "tags": tags or []
+        "priority": str(priority),
+        "markdown": "yes"
     }
+    if tags:
+        params["tags"] = ",".join(tags)
 
+    query_str = urllib.parse.urlencode(params)
+    url = f"{server}/{topic}?{query_str}"
+
+    # 2. 构造 HTTP 头部 (RFC 2047 编码 Title，支持 Content-Type: text/markdown)
+    import base64
+    b64_title = base64.b64encode(title.encode("utf-8")).decode("ascii")
     headers = {
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Title": f"=?utf-8?B?{b64_title}?=",
+        "Priority": str(priority),
+        "Markdown": "yes",
         "User-Agent": "OpenWrt-Modem-Redial/Ntfy"
     }
+    if tags:
+        headers["Tags"] = ",".join(tags)
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -531,7 +542,8 @@ def send_ntfy_notification(
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    # 3. Request Body 采用纯 Markdown 文本，绝不使用 JSON 格式
+    data_bytes = message.encode("utf-8")
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
 
     try:
@@ -562,7 +574,7 @@ def notify_redial_result(
     extra_info: str = "",
     log_file: str = None
 ):
-    """根据用户配置的事件定义，发送对应的 Ntfy 消息通知"""
+    """根据用户配置的事件定义，发送对应的 Ntfy Markdown 格式消息通知"""
     try:
         conf = load_uci_config()
         if str(conf.get("ntfy_enabled", "0")) != "1":
@@ -589,62 +601,66 @@ def notify_redial_result(
         src_name = trigger_names.get(trigger_source, "自动重拨")
 
         if success:
-            ip_changed_tag = " (已更换)" if (new_ip and old_ip and new_ip != old_ip) else ""
+            ip_changed_tag = " *(已更换)*" if (new_ip and old_ip and new_ip != old_ip) else ""
             if trigger_source == "qos":
                 title = "🚨 UDP QoS 阻断已解除并换新 IP"
                 msg = (
-                    f"【告警解除】检测到运营商 UDP QoS 阻断，已自动重拨恢复！\n"
-                    f"• 触发原因: {extra_info or 'UDP 探测全部失败，疑似遭遇丢包阻断'}\n"
-                    f"• 重拨耗时: {elapsed} 秒\n"
-                    f"• 重拨前 IP: {old_ip or '未知'}\n"
-                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
-                    f"• 发生时间: {now_str}"
+                    f"### 🚨 UDP QoS 阻断已解除并换新 IP\n"
+                    f"> **检测到运营商 UDP QoS 阻断，已自动重新拨号换 IP 恢复！**\n\n"
+                    f"- **触发原因**: {extra_info or 'UDP 探测全部失败，疑似遭遇限速/阻断'}\n"
+                    f"- **重拨耗时**: `{elapsed} 秒`\n"
+                    f"- **重拨前 IP**: `{old_ip or '未知'}`\n"
+                    f"- **重拨后 IP**: `{new_ip}`{ip_changed_tag}\n"
+                    f"- **发生时间**: {now_str}"
                 )
                 priority = 4
                 tags = ["rotating_light", "arrows_counterclockwise", "shield"]
             elif trigger_source == "cron":
                 title = "🕒 光猫定时重拨换 IP 完成"
                 msg = (
-                    f"计划任务定时重拨换 IP 成功！\n"
-                    f"• 目标接口: {wan_name}\n"
-                    f"• 重拨耗时: {elapsed} 秒\n"
-                    f"• 重拨前 IP: {old_ip or '未知'}\n"
-                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
-                    f"• 发生时间: {now_str}"
+                    f"### 🕒 光猫定时重拨换 IP 完成\n"
+                    f"> **计划任务定时重拨换 IP 成功！**\n\n"
+                    f"- **目标接口**: `{wan_name}`\n"
+                    f"- **重拨耗时**: `{elapsed} 秒`\n"
+                    f"- **重拨前 IP**: `{old_ip or '未知'}`\n"
+                    f"- **重拨后 IP**: `{new_ip}`{ip_changed_tag}\n"
+                    f"- **发生时间**: {now_str}"
                 )
                 priority = 2
                 tags = ["alarm_clock", "arrows_counterclockwise"]
             else:
                 title = "⚡ 光猫手动重拨换 IP 完成"
                 msg = (
-                    f"光猫手动重新拨号换 IP 成功！\n"
-                    f"• 目标接口: {wan_name}\n"
-                    f"• 重拨耗时: {elapsed} 秒\n"
-                    f"• 重拨前 IP: {old_ip or '未知'}\n"
-                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
-                    f"• 发生时间: {now_str}"
+                    f"### ⚡ 光猫手动重拨换 IP 完成\n"
+                    f"> **光猫手动重新拨号换 IP 成功！**\n\n"
+                    f"- **目标接口**: `{wan_name}`\n"
+                    f"- **重拨耗时**: `{elapsed} 秒`\n"
+                    f"- **重拨前 IP**: `{old_ip or '未知'}`\n"
+                    f"- **重拨后 IP**: `{new_ip}`{ip_changed_tag}\n"
+                    f"- **发生时间**: {now_str}"
                 )
                 priority = 3
                 tags = ["zap", "arrows_counterclockwise", "white_check_mark"]
         else:
             title = f"⚠️ 光猫重拨换 IP 失败告警 ({src_name})"
             msg = (
-                f"【严重告警】光猫重拨换 IP 执行失败！\n"
-                f"• 触发方式: {src_name}\n"
-                f"• 目标接口: {wan_name}\n"
-                f"• 失败原因: {fail_reason or '执行异常或超时未上线'}\n"
-                f"• 累计耗时: {elapsed} 秒\n"
-                f"• 发生时间: {now_str}\n"
-                f"• 安全状态: 已执行 AlwaysOn 回滚恢复，请检查光猫连接或密码"
+                f"### ⚠️ 光猫重拨换 IP 失败告警 ({src_name})\n"
+                f"> **【严重告警】光猫重拨换 IP 执行失败！**\n\n"
+                f"- **触发方式**: {src_name}\n"
+                f"- **目标接口**: `{wan_name}`\n"
+                f"- **失败原因**: `{fail_reason or '执行异常或超时未上线'}`\n"
+                f"- **累计耗时**: `{elapsed} 秒`\n"
+                f"- **发生时间**: {now_str}\n"
+                f"- **安全状态**: 已执行 AlwaysOn 回滚恢复，请检查光猫连接或密码"
             )
             priority = 5
             tags = ["warning", "rotating_light", "x"]
 
         ok, res_msg = send_ntfy_notification(title, msg, priority, tags, conf)
         if ok:
-            log(f"[+] [Ntfy] 消息通知推送成功: {title}", log_file)
+            log(f"[+] [Ntfy] Markdown 消息通知推送成功: {title}", log_file)
         else:
-            log(f"[-] [Ntfy] 消息通知推送失败: {res_msg}", log_file)
+            log(f"[-] [Ntfy] Markdown 消息通知推送失败: {res_msg}", log_file)
     except Exception as e:
         log(f"[-] [Ntfy] 处理消息通知异常: {e}", log_file)
 
@@ -1316,10 +1332,12 @@ def main():
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         title = "🔔 光猫重拨助手 - Ntfy 测试通知"
         message = (
-            f"🎉 恭喜！这是一条来自 OpenWrt/iStoreOS 光猫重拨助手的测试通知。\n"
-            f"• 服务器: {uci_conf.get('ntfy_server', 'https://ntfy.sh')}\n"
-            f"• 主题: {topic}\n"
-            f"• 发送时间: {now_str}\n"
+            f"### 🔔 光猫重拨助手 - Ntfy 测试通知\n"
+            f"> **恭喜！这是一条来自 OpenWrt / iStoreOS 光猫重拨助手的测试通知。**\n\n"
+            f"- **服务器**: `{uci_conf.get('ntfy_server', 'https://ntfy.sh')}`\n"
+            f"- **订阅主题**: `{topic}`\n"
+            f"- **发送时间**: {now_str}\n"
+            f"- **消息格式**: `Markdown 纯文本渲染`\n\n"
             f"如果您收到了这条消息，说明您的 Ntfy 配置完全正确，可正常接收重拨与 QoS 告警通知！"
         )
         ok, res_msg = send_ntfy_notification(
