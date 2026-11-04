@@ -1,43 +1,102 @@
 #!/bin/bash
-# 自动打包生成 OpenWrt / iStoreOS 官方规范 .ipk 安装包脚本 (GNU tar.gz 规范，版本号自动递增)
+# 自动打包生成 OpenWrt / iStoreOS 官方规范 .ipk 安装包脚本 (GNU tar.gz 规范，统一使用 Git Tag 版本号)
 
 set -e
-DIR="$(cd "$(dirname "$0")" && pwd)"
+export SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-python3 - << 'PYEOF'
-import os, tarfile, shutil, io, time, re
+python3 - "$@" << 'PYEOF'
+import os, tarfile, shutil, io, time, re, sys, subprocess
 
-DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else '/Users/arvin/Documents/Test/luci-app-modem-redial'
+DIR = os.environ.get("SCRIPT_DIR") or os.getcwd()
 VER_FILE = os.path.join(DIR, 'VERSION')
 OUT_DIR = os.path.join(DIR, 'bin')
 TMP_DIR = os.path.join(DIR, 'build_tmp')
+MAKEFILE = os.path.join(DIR, 'Makefile')
 
-# 读取并自动自增版本号
-current_ver = "1.0.0-1"
-if os.path.exists(VER_FILE):
+# 统一获取并解析版本号 (优先级: 命令行参数 > 环境变量 > Git Tag > VERSION文件 > 默认值)
+tag_source = ""
+raw_ver = ""
+
+# 1. 命令行参数 (如: bash build_ipk.sh v1.0.5)
+if len(sys.argv) > 1 and sys.argv[1].strip():
+    candidate = sys.argv[1].strip()
+    if candidate not in ("main", "master") and not candidate.startswith("refs/"):
+        raw_ver = candidate
+        tag_source = f"命令行参数 ({raw_ver})"
+
+# 2. 环境变量 (GitHub Actions 等 CI 环境)
+if not raw_ver:
+    env_ref = os.environ.get("GITHUB_REF_NAME") or os.environ.get("GIT_TAG")
+    if env_ref and not env_ref.startswith("refs/") and env_ref not in ("main", "master"):
+        raw_ver = env_ref.strip()
+        tag_source = f"环境变量 GITHUB_REF_NAME ({raw_ver})"
+
+# 3. 自动从 Git Tag 获取
+if not raw_ver:
     try:
-        with open(VER_FILE, 'r', encoding='utf-8') as f:
-            c = f.read().strip()
-            if c: current_ver = c
+        # 当前 Commit 上的最新 Tag
+        res = subprocess.run(["git", "tag", "-l", "--points-at", "HEAD", "--sort=-v:refname"], cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            raw_ver = res.stdout.strip().splitlines()[0]
+            tag_source = f"当前 Commit Git Tag ({raw_ver})"
+        else:
+            # 仓库中全局最新 Tag
+            res2 = subprocess.run(["git", "tag", "-l", "--sort=-v:refname"], cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res2.returncode == 0 and res2.stdout.strip():
+                raw_ver = res2.stdout.strip().splitlines()[0]
+                tag_source = f"仓库全局最新 Git Tag ({raw_ver})"
     except Exception:
         pass
 
-# 自增版本号: 1.0.0-1 -> 1.0.1-1
-match = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$', current_ver)
-if match:
-    major, minor, patch, build = match.groups()
-    new_patch = int(patch) + 1
-    new_ver = f"{major}.{minor}.{new_patch}-1"
+# 4. 从 VERSION 文件读取回退值
+if not raw_ver and os.path.exists(VER_FILE):
+    try:
+        with open(VER_FILE, 'r', encoding='utf-8') as f:
+            c = f.read().strip()
+            if c:
+                raw_ver = c
+                tag_source = f"VERSION 文件 ({raw_ver})"
+    except Exception:
+        pass
+
+# 5. 默认保底版本
+if not raw_ver:
+    raw_ver = "1.0.0"
+    tag_source = "默认保底值"
+
+# 规范化版本号：
+# 1) 去除前导 'v' 或 'V' (如 v1.0.5 -> 1.0.5)
+clean_ver = re.sub(r'^[vV]', '', raw_ver).strip()
+
+# 2) 遵循 OpenWrt 官方规范: <version>-<pkg_release>
+# 若 Tag 自身不包含 '-' (如 1.0.5)，则自动补充包发布修订号 -1 (即 1.0.5-1)
+if '-' in clean_ver:
+    final_ver = clean_ver
 else:
-    new_ver = "1.0.1-1"
+    final_ver = f"{clean_ver}-1"
 
-# 写回 VERSION 文件
+# 解析基础版本与发布修订号 (供 Makefile 使用)
+pkg_ver, pkg_rel = final_ver.split('-', 1) if '-' in final_ver else (final_ver, '1')
+
+# 同步写入 VERSION 文件
 with open(VER_FILE, 'w', encoding='utf-8') as f:
-    f.write(new_ver + '\n')
+    f.write(final_ver + '\n')
 
-print(f"==> [版本递增] {current_ver} -> {new_ver}")
+# 同步更新 Makefile 中的 PKG_VERSION 与 PKG_RELEASE
+if os.path.exists(MAKEFILE):
+    try:
+        with open(MAKEFILE, 'r', encoding='utf-8') as f:
+            m_content = f.read()
+        m_content = re.sub(r'PKG_VERSION:=.*', f'PKG_VERSION:={pkg_ver}', m_content)
+        m_content = re.sub(r'PKG_RELEASE:=.*', f'PKG_RELEASE:={pkg_rel}', m_content)
+        with open(MAKEFILE, 'w', encoding='utf-8') as f:
+            f.write(m_content)
+    except Exception:
+        pass
 
-OUT_IPK = os.path.join(OUT_DIR, f'luci-app-modem-redial_{new_ver}_all.ipk')
+print(f"==> [版本识别] 来源: {tag_source} => 最终打包版本: {final_ver}")
+
+OUT_IPK = os.path.join(OUT_DIR, f'luci-app-modem-redial_{final_ver}_all.ipk')
 LATEST_IPK = os.path.join(OUT_DIR, 'luci-app-modem-redial_latest_all.ipk')
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -62,7 +121,7 @@ with tarfile.open(control_tar_path, 'w:gz', format=tarfile.GNU_FORMAT) as tar:
         tar.addfile(ti, io.BytesIO(data))
 
     control_content = f'''Package: luci-app-modem-redial
-Version: {new_ver}
+Version: {final_ver}
 Depends: python3
 Section: luci
 Architecture: all

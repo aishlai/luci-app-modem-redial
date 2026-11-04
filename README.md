@@ -183,17 +183,31 @@ python3 redial_v271_20.py --url http://192.168.1.1 --user user --password "你�
 
 ---
 
-## 🚀 GitHub Actions 自动编译与发版机制
+## 🚀 编译打包与 GitHub Actions 自动发版
+
+### 1. 本地打包构建
+
+项目根目录提供了官方规范打包脚本 `build_ipk.sh`，版本号统一与 Git Tag 对齐：
+
+```bash
+# 自动读取当前 Git Tag 打包 (例如当前 Tag 为 v1.0.5，则生成 luci-app-modem-redial_1.0.5-1_all.ipk)
+bash ./build_ipk.sh
+
+# 也支持直接传入指定版本号打包
+bash ./build_ipk.sh v1.0.5
+```
+
+### 2. GitHub Actions 自动编译与发版
 
 本项目已内置完整的 GitHub Actions 自动化工作流 [`.github/workflows/release.yml`](.github/workflows/release.yml)：
 
 1. **自动构建与验证**：任何代码 Push 到 `main` 分支时，Actions 会自动构建 `.ipk` 并输出构建产物 Artifacts 与 SHA256 校验和。
-2. **一键自动发布 Release**：只需在本地打 Tag 并推送至 GitHub：
+2. **统一基于 Git Tag 一键发版**：只需在本地打 Tag 并推送至 GitHub：
    ```bash
-   git tag v1.0.1
-   git push origin v1.0.1
+   git tag v1.0.5
+   git push origin v1.0.5
    ```
-   GitHub Actions 会自动触发打包并将编译好的 `luci-app-modem-redial_*.ipk` 自动发布到 GitHub Releases 供全球用户下载！
+   GitHub Actions 检测到 Tag 推送后，会自动将 Tag 版本（如 `v1.0.5`）解析为符合 OpenWrt 规范的包版本（如 `1.0.5-1`），打包并将编译好的 `luci-app-modem-redial_1.0.5-1_all.ipk` 自动发布到 GitHub Releases 供下载！
 
 ---
 
@@ -202,7 +216,7 @@ python3 redial_v271_20.py --url http://192.168.1.1 --user user --password "你�
 - [x] 原生 OpenWrt 24.10 / iStoreOS 纯 JS 视图规范重构；
 - [x] 进程双 fork 守护化与 0.16s 异步极速响应；
 - [x] 单用户锁自动清理与防锁死兜底；
-- [x] 每次构建自动自增版本号机制；
+- [x] 统一遵循 Git Tag 的版本号管理与 GitHub Actions 自动打包发布；
 - [ ] **UDP 阻断智能探测与自动重拨机制**（计划中）：
   - 后台守护线程周期性探测特定高敏 UDP 目标（如游戏服务器、DNS over UDP 等）；
   - 自动统计近期 UDP 丢包率与连通性；

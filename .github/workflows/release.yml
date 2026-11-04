@@ -35,7 +35,11 @@ jobs:
       - name: Build LuCI IPK Package
         run: |
           chmod +x ./build_ipk.sh
-          bash ./build_ipk.sh
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            bash ./build_ipk.sh "${{ github.ref_name }}"
+          else
+            bash ./build_ipk.sh
+          fi
 
       - name: Generate Checksums
         run: |
