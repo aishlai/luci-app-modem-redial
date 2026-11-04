@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.2.1';
+var PLUGIN_VERSION = 'v1.3.0';
 
 return view.extend({
 	load: function() {
@@ -199,6 +199,69 @@ return view.extend({
 				'<div style="margin-top:8px;text-align:right;">' +
 					'<button type="button" class="btn cbi-button cbi-button-action" id="btn_refresh_qos_log" onclick="window.refreshQosLog()" style="margin-right:8px;">🔄 ' + _('刷新 QoS 日志') + '</button>' +
 					'<button type="button" class="btn cbi-button cbi-button-reset" id="btn_clear_qos_log" onclick="window.clearQosLog()">🗑️ ' + _('清空 QoS 日志') + '</button>' +
+				'</div>' +
+			'</div>';
+		};
+
+		// Ntfy 消息通知推送设置
+		s = m.section(form.NamedSection, 'config', 'modem_redial', _('Ntfy 消息通知推送'));
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'ntfy_enabled', _('启用 Ntfy 通知'));
+		o.default = '0';
+		o.rmempty = false;
+		o.description = _('当发生重拨换 IP、UDP QoS 阻断或任务异常时，通过 <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">ntfy.sh</a> 或自建 ntfy 服务器向手机/桌面推送实时通知。');
+
+		o = s.option(form.Value, 'ntfy_server', _('Ntfy 服务器地址'));
+		o.depends('ntfy_enabled', '1');
+		o.default = 'https://ntfy.sh';
+		o.placeholder = 'https://ntfy.sh';
+		o.description = _('默认为官方公共服务器 <code>https://ntfy.sh</code>，若使用自建实例请填写您的完整服务器 URL。');
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'ntfy_topic', _('Topic 主题名称'));
+		o.depends('ntfy_enabled', '1');
+		o.placeholder = 'my_modem_alerts_xxxx';
+		o.description = _('ntfy 消息订阅主题（建议使用难以猜测的独特名称以防泄露，可在手机 ntfy App 中订阅此主题）。');
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'ntfy_token', _('访问令牌 Token (可选)'));
+		o.depends('ntfy_enabled', '1');
+		o.password = true;
+		o.placeholder = 'tk_... (若为公开主题可留空)';
+		o.description = _('若您的主题开启了权限保护，或自建服务器要求认证，请在此填写 Bearer Access Token。');
+
+		o = s.option(form.Flag, 'notify_event_manual', _('手动重拨完成时通知'));
+		o.depends('ntfy_enabled', '1');
+		o.default = '1';
+		o.description = _('在 WebUI 点击「⚡ 立即重拨换IP」或手动执行重拨成功后推送新 IP 信息。');
+
+		o = s.option(form.Flag, 'notify_event_cron', _('定时自动重拨完成时通知'));
+		o.depends('ntfy_enabled', '1');
+		o.default = '1';
+		o.description = _('凌晨 Cron 计划任务定时重拨成功后推送新 IP 信息（若夜间不想被打扰可关闭此项）。');
+
+		o = s.option(form.Flag, 'notify_event_qos', _('UDP QoS 阻断触发换 IP 时通知'));
+		o.depends('ntfy_enabled', '1');
+		o.default = '1';
+		o.description = _('当检测到遭遇运营商 UDP QoS 阻断并自动重新拨号换 IP 完成时推送警报与新 IP。');
+
+		o = s.option(form.Flag, 'notify_event_fail', _('重拨失败告警通知'));
+		o.depends('ntfy_enabled', '1');
+		o.default = '1';
+		o.description = _('无论手动、定时还是 QoS 触发，当重拨过程遭遇失败（如光猫登录失败、超时未连上等）时，立即发送高优先级告警。');
+
+		o = s.option(form.DummyValue, '_btn_test_ntfy_view', _('测试通知'));
+		o.depends('ntfy_enabled', '1');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="margin-top:5px;">' +
+				'<button type="button" class="btn cbi-button cbi-button-action" id="btn_test_ntfy" onclick="window.testNtfyNotification()">' +
+					'🔔 发送测试通知' +
+				'</button>' +
+				'<span id="test_ntfy_tip" style="margin-left:10px;vertical-align:middle;font-size:13px;"></span>' +
+				'<div style="font-size:12px;color:#888;margin-top:6px;">' +
+					_('提示：如果刚修改了服务器或 Topic，请先点击页面右下角【保存并应用】，再点击测试按钮。') +
 				'</div>' +
 			'</div>';
 		};
@@ -624,11 +687,51 @@ return view.extend({
 			});
 		};
 
+		// 测试 Ntfy 消息通知
+		window.testNtfyNotification = function() {
+			var btn = document.getElementById('btn_test_ntfy');
+			var tip = document.getElementById('test_ntfy_tip');
+			if (btn) {
+				btn.disabled = true;
+				btn.innerText = '⏳ 正在发送测试通知...';
+			}
+			if (tip) tip.innerHTML = '';
+
+			fs.exec('/usr/bin/modem_redial', ['--test-ntfy']).then(function(res) {
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '🔔 发送测试通知';
+				}
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var info = {};
+				try {
+					info = JSON.parse(raw || '{}');
+				} catch(e) {
+					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ 解析测试结果失败: ' + raw + '</span>';
+					return;
+				}
+
+				if (info.success) {
+					if (tip) tip.innerHTML = '<span style="color:#2da44e;font-weight:600;">✅ 测试通知已发送，请检查您的手机或终端设备！</span>';
+				} else {
+					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;font-weight:600;">❌ 发送失败: ' + (info.error || '未知错误') + '</span>';
+				}
+			}).catch(function(err) {
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '🔔 发送测试通知';
+				}
+				if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ 请求出错: ' + (err.message || err) + '</span>';
+			});
+		};
+
 		document.addEventListener('click', function(ev) {
 			if (ev.target && ev.target.id === 'btn_refresh_qos_log') {
 				window.refreshQosLog();
 			} else if (ev.target && ev.target.id === 'btn_clear_qos_log') {
 				window.clearQosLog();
+			} else if (ev.target && ev.target.id === 'btn_test_ntfy') {
+				window.testNtfyNotification();
 			}
 		});
 

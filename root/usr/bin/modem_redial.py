@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.2.1-1"
+__version__ = "1.3.0-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -193,7 +193,15 @@ def load_uci_config() -> dict:
         "udp_fail_threshold": "2",
         "udp_cooldown": "180",
         "udp_log_file": DEFAULT_QOS_LOG,
-        "udp_targets": list(DEFAULT_UDP_TARGETS)
+        "udp_targets": list(DEFAULT_UDP_TARGETS),
+        "ntfy_enabled": "0",
+        "ntfy_server": "https://ntfy.sh",
+        "ntfy_topic": "",
+        "ntfy_token": "",
+        "notify_event_manual": "1",
+        "notify_event_cron": "1",
+        "notify_event_qos": "1",
+        "notify_event_fail": "1"
     }
 
     def parse_lines(lines):
@@ -478,15 +486,184 @@ def query_status_json(router_ip: str, username: str, password: str, wan_name: st
             pass
 
 
+def send_ntfy_notification(
+    title: str,
+    message: str,
+    priority: int = 3,
+    tags: list = None,
+    conf: dict = None
+) -> tuple:
+    """
+    发送 Ntfy 消息通知 (POST JSON 格式至 ntfy.sh 或自建服务器)
+    返回: (success: bool, msg: str)
+    """
+    if conf is None:
+        conf = load_uci_config()
+
+    if str(conf.get("ntfy_enabled", "0")) != "1":
+        return False, "Ntfy 功能未启用"
+
+    server = (conf.get("ntfy_server") or "https://ntfy.sh").strip().rstrip("/")
+    topic = (conf.get("ntfy_topic") or "").strip().lstrip("/")
+    token = (conf.get("ntfy_token") or "").strip()
+
+    if not topic:
+        return False, "Ntfy Topic 为空，请先配置主题名称"
+
+    url = f"{server}/{topic}"
+    payload = {
+        "topic": topic,
+        "title": title,
+        "message": message,
+        "priority": priority,
+        "tags": tags or []
+    }
+
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "OpenWrt-Modem-Redial/Ntfy"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+
+    try:
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+            if resp.status in (200, 201, 204):
+                return True, "发送成功"
+            else:
+                return False, f"Ntfy 服务器返回状态码: {resp.status}"
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="ignore")[:100]
+        except Exception:
+            pass
+        return False, f"HTTP {e.code} 错误: {err_body or e.reason}"
+    except Exception as e:
+        return False, f"网络请求异常: {e}"
+
+
+def notify_redial_result(
+    trigger_source: str,
+    success: bool,
+    old_ip: str = "",
+    new_ip: str = "",
+    elapsed: int = 0,
+    fail_reason: str = "",
+    wan_name: str = "",
+    extra_info: str = "",
+    log_file: str = None
+):
+    """根据用户配置的事件定义，发送对应的 Ntfy 消息通知"""
+    try:
+        conf = load_uci_config()
+        if str(conf.get("ntfy_enabled", "0")) != "1":
+            return
+
+        # 检查当前事件是否在用户的接收订阅列表中
+        if not success:
+            if str(conf.get("notify_event_fail", "1")) != "1":
+                return
+        else:
+            if trigger_source == "manual" and str(conf.get("notify_event_manual", "1")) != "1":
+                return
+            elif trigger_source == "cron" and str(conf.get("notify_event_cron", "1")) != "1":
+                return
+            elif trigger_source == "qos" and str(conf.get("notify_event_qos", "1")) != "1":
+                return
+
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        trigger_names = {
+            "manual": "手动执行",
+            "cron": "定时任务",
+            "qos": "UDP QoS 触发"
+        }
+        src_name = trigger_names.get(trigger_source, "自动重拨")
+
+        if success:
+            ip_changed_tag = " (已更换)" if (new_ip and old_ip and new_ip != old_ip) else ""
+            if trigger_source == "qos":
+                title = "🚨 UDP QoS 阻断已解除并换新 IP"
+                msg = (
+                    f"【告警解除】检测到运营商 UDP QoS 阻断，已自动重拨恢复！\n"
+                    f"• 触发原因: {extra_info or 'UDP 探测全部失败，疑似遭遇丢包阻断'}\n"
+                    f"• 重拨耗时: {elapsed} 秒\n"
+                    f"• 重拨前 IP: {old_ip or '未知'}\n"
+                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
+                    f"• 发生时间: {now_str}"
+                )
+                priority = 4
+                tags = ["rotating_light", "arrows_counterclockwise", "shield"]
+            elif trigger_source == "cron":
+                title = "🕒 光猫定时重拨换 IP 完成"
+                msg = (
+                    f"计划任务定时重拨换 IP 成功！\n"
+                    f"• 目标接口: {wan_name}\n"
+                    f"• 重拨耗时: {elapsed} 秒\n"
+                    f"• 重拨前 IP: {old_ip or '未知'}\n"
+                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
+                    f"• 发生时间: {now_str}"
+                )
+                priority = 2
+                tags = ["alarm_clock", "arrows_counterclockwise"]
+            else:
+                title = "⚡ 光猫手动重拨换 IP 完成"
+                msg = (
+                    f"光猫手动重新拨号换 IP 成功！\n"
+                    f"• 目标接口: {wan_name}\n"
+                    f"• 重拨耗时: {elapsed} 秒\n"
+                    f"• 重拨前 IP: {old_ip or '未知'}\n"
+                    f"• 重拨后 IP: {new_ip}{ip_changed_tag}\n"
+                    f"• 发生时间: {now_str}"
+                )
+                priority = 3
+                tags = ["zap", "arrows_counterclockwise", "white_check_mark"]
+        else:
+            title = f"⚠️ 光猫重拨换 IP 失败告警 ({src_name})"
+            msg = (
+                f"【严重告警】光猫重拨换 IP 执行失败！\n"
+                f"• 触发方式: {src_name}\n"
+                f"• 目标接口: {wan_name}\n"
+                f"• 失败原因: {fail_reason or '执行异常或超时未上线'}\n"
+                f"• 累计耗时: {elapsed} 秒\n"
+                f"• 发生时间: {now_str}\n"
+                f"• 安全状态: 已执行 AlwaysOn 回滚恢复，请检查光猫连接或密码"
+            )
+            priority = 5
+            tags = ["warning", "rotating_light", "x"]
+
+        ok, res_msg = send_ntfy_notification(title, msg, priority, tags, conf)
+        if ok:
+            log(f"[+] [Ntfy] 消息通知推送成功: {title}", log_file)
+        else:
+            log(f"[-] [Ntfy] 消息通知推送失败: {res_msg}", log_file)
+    except Exception as e:
+        log(f"[-] [Ntfy] 处理消息通知异常: {e}", log_file)
+
+
 def redial_wan(
     router_ip: str,
     username: str,
     password: str,
     target_wan_name: str,
     pause_seconds: int,
-    log_file: str = None
+    log_file: str = None,
+    trigger_source: str = "manual",
+    extra_info: str = ""
 ) -> bool:
     """执行完整的重新拨号流程"""
+    t_start = time.time()
+    old_ip = "未知"
+    new_ip = None
+    fail_reason = ""
     log("=" * 60, log_file)
     log(f"开始执行光猫重新拨号任务 (目标: {target_wan_name})", log_file)
     client = HuaweiONTClient(base_url=router_ip, username=username, password=password)
@@ -498,6 +675,7 @@ def redial_wan(
     try:
         log(f"正在登录光猫后台 ({router_ip}) ...", log_file)
         if not client.login():
+            fail_reason = "登录光猫失败，请检查账号密码或光猫连接状态"
             log("[-] 登录失败，请检查账号密码或光猫连接状态！", log_file)
             return False
         log("[+] 登录成功！", log_file)
@@ -505,6 +683,7 @@ def redial_wan(
         log(f"正在查找目标 WAN 连接: {target_wan_name} ...", log_file)
         target_wan = client.find_wan(target_wan_name)
         if not target_wan:
+            fail_reason = f"未找到包含 '{target_wan_name}' 的 WAN 连接"
             log(f"[-] 未找到包含 '{target_wan_name}' 的 WAN 连接！", log_file)
             return False
 
@@ -515,6 +694,7 @@ def redial_wan(
         # 1. 切换为 Manual (手动拨号，触发下线)
         log("[步骤 1/3] 正在将拨号方式切换为【手动】(Manual)，断开当前连接...", log_file)
         if not client.set_connection_trigger(domain, "Manual"):
+            fail_reason = "切换【手动】拨号方式失败"
             log("[-] 切换【手动】拨号方式失败！", log_file)
             return False
         switched_to_manual = True
@@ -531,13 +711,13 @@ def redial_wan(
             time.sleep(1)
             client.login()
             if not client.set_connection_trigger(domain, "AlwaysOn"):
+                fail_reason = "切换【自动】拨号方式失败"
                 log("[-] 重试切换【自动】拨号方式依然失败！", log_file)
                 return False
         switched_to_alwayson = True
         log("[+] 切换为【自动】成功，等待光猫获取新 IP...", log_file)
 
         # 循环检查是否上线并获取到了新 IP
-        new_ip = None
         for attempt in range(1, 16):
             time.sleep(2)
             try:
@@ -566,6 +746,7 @@ def redial_wan(
             log("=" * 60, log_file)
             return True
         else:
+            fail_reason = "超时未检测到连接完全上线并获取有效公网 IP"
             log("[-] 超时未检测到连接完全上线，请检查光猫后台状态。", log_file)
             log("=" * 60, log_file)
             return False
@@ -590,6 +771,19 @@ def redial_wan(
         except Exception:
             pass
         log("[*] 重拨换IP流程结束。", log_file)
+
+        # 触发 Ntfy 消息通知（在会话完全注销、网络恢复后发出）
+        notify_redial_result(
+            trigger_source=trigger_source,
+            success=bool(new_ip),
+            old_ip=old_ip,
+            new_ip=new_ip or "",
+            elapsed=int(time.time() - t_start),
+            fail_reason=fail_reason,
+            wan_name=target_wan_name,
+            extra_info=extra_info,
+            log_file=log_file
+        )
 
 
 GITHUB_REPO = "aishlai/luci-app-modem-redial"
@@ -1040,7 +1234,9 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                             password=conf.get("password"),
                             target_wan_name=conf.get("wan_name", "2_INTERNET_R_VID_3961"),
                             pause_seconds=int(conf.get("pause_seconds", "3") or "3"),
-                            log_file=log_file
+                            log_file=log_file,
+                            trigger_source="qos",
+                            extra_info=f"连续 {fail_threshold} 次探测所有 UDP 目标均不可达 ({targets_desc})"
                         )
                         elapsed = int(time.time() - t_start)
 
@@ -1104,8 +1300,37 @@ def main():
     parser.add_argument("--test-udp", action="store_true", help="测试当前网络环境下各目标 UDP 连通性并输出 JSON")
     parser.add_argument("--clear-qos-log", action="store_true", help="清空 UDP QoS 独立持久化日志")
     parser.add_argument("--show-qos-log", action="store_true", help="输出 UDP QoS 独立持久化日志内容")
+    parser.add_argument("--test-ntfy", action="store_true", help="发送测试 Ntfy 消息通知并输出 JSON")
 
     args = parser.parse_args()
+
+    if args.test_ntfy:
+        if str(uci_conf.get("ntfy_enabled", "0")) != "1":
+            print(json.dumps({"success": False, "error": "请先开启「启用 Ntfy 通知」开关并点击保存应用"}, ensure_ascii=False))
+            sys.exit(0)
+        topic = (uci_conf.get("ntfy_topic") or "").strip()
+        if not topic:
+            print(json.dumps({"success": False, "error": "请先填写 Topic 主题名称并点击保存应用"}, ensure_ascii=False))
+            sys.exit(0)
+
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        title = "🔔 光猫重拨助手 - Ntfy 测试通知"
+        message = (
+            f"🎉 恭喜！这是一条来自 OpenWrt/iStoreOS 光猫重拨助手的测试通知。\n"
+            f"• 服务器: {uci_conf.get('ntfy_server', 'https://ntfy.sh')}\n"
+            f"• 主题: {topic}\n"
+            f"• 发送时间: {now_str}\n"
+            f"如果您收到了这条消息，说明您的 Ntfy 配置完全正确，可正常接收重拨与 QoS 告警通知！"
+        )
+        ok, res_msg = send_ntfy_notification(
+            title=title,
+            message=message,
+            priority=3,
+            tags=["tada", "bell"],
+            conf=uci_conf
+        )
+        print(json.dumps({"success": ok, "error": ("" if ok else res_msg), "msg": res_msg}, ensure_ascii=False))
+        sys.exit(0)
 
     if args.clear_qos_log:
         qos_log_path = uci_conf.get("udp_log_file") or DEFAULT_QOS_LOG
@@ -1188,13 +1413,15 @@ def main():
 
     write_pid()
     try:
+        trigger = "cron" if args.cron else "manual"
         success = redial_wan(
             router_ip=args.url,
             username=args.user,
             password=args.password,
             target_wan_name=args.wan,
             pause_seconds=args.delay,
-            log_file=args.logfile
+            log_file=args.logfile,
+            trigger_source=trigger
         )
         sys.exit(0 if success else 1)
     finally:
