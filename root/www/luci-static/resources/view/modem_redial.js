@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.6';
+var PLUGIN_VERSION = 'v1.4.7';
 
 return view.extend({
 	load: function() {
@@ -64,7 +64,7 @@ return view.extend({
 				'<button type="button" class="btn cbi-button-apply" id="btn_manual_redial" onclick="window.triggerModemRedial()">' +
 					'⚡ ' + _('立即重拨号换IP') +
 				'</button>' +
-				'<button type="button" class="btn cbi-button-reset" onclick="window.refreshModemStatus()">' +
+				'<button type="button" class="btn cbi-button-reset" id="btn_refresh_status" onclick="window.refreshModemStatus(true)">' +
 					'🔄 ' + _('刷新状态') +
 				'</button>' +
 				'<button type="button" class="btn cbi-button-action" onclick="window.showLogModal(false)">' +
@@ -622,14 +622,32 @@ return view.extend({
 			});
 		};
 
-		window.refreshModemStatus = function() {
+		window.refreshModemStatus = function(isManualClick) {
+			var btn = document.getElementById('btn_refresh_status');
+			var ipEl = document.getElementById('modem_current_ip');
+			var statusEl = document.getElementById('modem_conn_status');
+			var triggerEl = document.getElementById('modem_trigger_mode');
+
+			if (isManualClick) {
+				if (btn) {
+					btn.disabled = true;
+					btn.innerText = '⏳ ' + _('正在刷新...');
+				}
+				if (ipEl) {
+					ipEl.innerHTML = '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('正在读取...') + '</span>';
+				}
+				if (statusEl) {
+					statusEl.innerHTML = '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('正在检测...') + '</span>';
+				}
+				if (triggerEl) {
+					triggerEl.innerHTML = '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('正在查询...') + '</span>';
+				}
+			}
+
 			fs.exec('/usr/bin/modem_redial', ['--status']).then(function(res) {
 				try {
 					var raw = (res && res.stdout) ? res.stdout : res;
 					var data = JSON.parse(raw || '{}');
-					var ipEl = document.getElementById('modem_current_ip');
-					var statusEl = document.getElementById('modem_conn_status');
-					var triggerEl = document.getElementById('modem_trigger_mode');
 					if (ipEl) ipEl.innerText = data.ip || '未知';
 					if (statusEl) {
 						statusEl.innerText = data.status || '未知';
@@ -641,7 +659,28 @@ return view.extend({
 					if (data.running && !window._autoCloseModalTimer && !window._redialJustFinished && !window._modemRedialTimer) {
 						window.startLogPolling();
 					}
-				} catch(e) {}
+
+					if (isManualClick && btn) {
+						btn.innerText = '✅ ' + _('已刷新');
+						setTimeout(function() {
+							btn.disabled = false;
+							btn.innerText = '🔄 ' + _('刷新状态');
+						}, 700);
+					}
+				} catch(e) {
+					if (isManualClick && btn) {
+						btn.disabled = false;
+						btn.innerText = '🔄 ' + _('刷新状态');
+					}
+				}
+			}).catch(function(err) {
+				if (isManualClick && btn) {
+					btn.innerText = '❌ ' + _('刷新失败');
+					setTimeout(function() {
+						btn.disabled = false;
+						btn.innerText = '🔄 ' + _('刷新状态');
+					}, 1000);
+				}
 			});
 		};
 
