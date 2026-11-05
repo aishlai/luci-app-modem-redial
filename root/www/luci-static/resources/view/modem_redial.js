@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.1';
+var PLUGIN_VERSION = 'v1.4.2';
 
 return view.extend({
 	load: function() {
@@ -68,7 +68,7 @@ return view.extend({
 					'<button type="button" class="btn cbi-button-action" onclick="window.showLogModal(false)">' +
 						'📜 ' + _('查看日志') +
 					'</button>' +
-					'<button type="button" class="btn cbi-button-neutral" id="btn_check_update" onclick="window.checkPluginUpdate()">' +
+					'<button type="button" class="btn cbi-button-neutral" id="btn_check_update" onclick="window.checkPluginUpdate(false)">' +
 						'🚀 ' + _('检查更新') +
 					'</button>' +
 					'<span id="check_update_tip" style="margin-left:5px;vertical-align:middle;display:inline-block;"></span>' +
@@ -320,6 +320,12 @@ return view.extend({
 
 		// ------------------ 日志悬浮层与轮询交互 ------------------
 		window.showLogModal = function(isTriggerRedial) {
+			if (window._autoCloseModalTimer) {
+				clearInterval(window._autoCloseModalTimer);
+				window._autoCloseModalTimer = null;
+			}
+			window._isRedialTriggeredManually = !!isTriggerRedial;
+
 			var title = isTriggerRedial ? _('光猫重新拨号执行日志') : _('光猫重拨助手运行日志');
 
 			ui.showModal(title, [
@@ -351,7 +357,13 @@ return view.extend({
 						}, '🗑️ ' + _('清空日志')),
 						E('button', {
 							'class': 'btn cbi-button-apply',
-							'click': ui.hideModal
+							'click': function() {
+								if (window._autoCloseModalTimer) {
+									clearInterval(window._autoCloseModalTimer);
+									window._autoCloseModalTimer = null;
+								}
+								ui.hideModal();
+							}
 						}, _('关闭'))
 					])
 				])
@@ -367,12 +379,15 @@ return view.extend({
 			});
 
 			if (isTriggerRedial) {
-				window.startLogPolling();
+				window.startLogPolling(true);
 			}
 		};
 
 		// 全局日志轮询函数
-		window.startLogPolling = function() {
+		window.startLogPolling = function(isFromManualTrigger) {
+			if (typeof isFromManualTrigger !== 'undefined') {
+				window._isRedialTriggeredManually = !!isFromManualTrigger;
+			}
 			var pollCount = 0;
 			var maxPolls = 60;
 
@@ -386,28 +401,73 @@ return view.extend({
 				clearInterval(window._modemRedialTimer);
 				window._modemRedialTimer = null;
 			}
+			if (window._autoCloseModalTimer) {
+				clearInterval(window._autoCloseModalTimer);
+				window._autoCloseModalTimer = null;
+			}
 
 			function finishPolling(isSuccess) {
 				if (window._modemRedialTimer) {
 					clearInterval(window._modemRedialTimer);
 					window._modemRedialTimer = null;
 				}
+				if (window._autoCloseModalTimer) {
+					clearInterval(window._autoCloseModalTimer);
+					window._autoCloseModalTimer = null;
+				}
+
 				var b = document.getElementById('btn_manual_redial');
 				if (b) {
 					b.disabled = false;
 					b.innerText = '⚡ ' + _('立即重拨号换IP');
 				}
-				var badge = document.getElementById('modal_status_badge');
-				if (badge) {
-					if (isSuccess) {
-						badge.innerHTML = '<span style="color:#28a745;font-weight:600;">🎉 ' + _('重拨换IP流程成功完成！') + '</span>';
-					} else {
-						badge.innerHTML = '<span style="color:#ffc107;font-weight:600;">🏁 ' + _('重拨任务已结束') + '</span>';
-					}
-				}
+
 				setTimeout(function() {
 					window.refreshModemStatus();
-				}, 1200);
+				}, 1000);
+
+				var isManual = !!window._isRedialTriggeredManually;
+
+				if (isSuccess) {
+					if (isManual) {
+						var countdown = 5;
+						var updateCountdownBadge = function() {
+							var badge = document.getElementById('modal_status_badge');
+							if (badge) {
+								badge.innerHTML = '<span style="color:#28a745;font-weight:600;">🎉 ' +
+									_('重拨换IP成功！本窗口将在 ') + countdown + _(' 秒后自动关闭...') +
+									'</span>';
+							}
+						};
+						updateCountdownBadge();
+						window._autoCloseModalTimer = setInterval(function() {
+							if (!document.getElementById('modem_redial_modal_log')) {
+								clearInterval(window._autoCloseModalTimer);
+								window._autoCloseModalTimer = null;
+								return;
+							}
+							countdown--;
+							if (countdown <= 0) {
+								clearInterval(window._autoCloseModalTimer);
+								window._autoCloseModalTimer = null;
+								ui.hideModal();
+							} else {
+								updateCountdownBadge();
+							}
+						}, 1000);
+					} else {
+						var badge = document.getElementById('modal_status_badge');
+						if (badge) {
+							badge.innerHTML = '<span style="color:#28a745;font-weight:600;">🎉 ' + _('重拨换IP流程成功完成！') + '</span>';
+						}
+					}
+				} else {
+					// 失败情况：绝不自动关闭悬浮层，保留完整日志供排查
+					var badge = document.getElementById('modal_status_badge');
+					if (badge) {
+						badge.innerHTML = '<span style="color:#dc3545;font-weight:600;">❌ ' + _('重拨换IP未成功，请检查上方日志排查原因。') + '</span>';
+					}
+				}
 			}
 
 			window._modemRedialTimer = setInterval(function() {
@@ -424,19 +484,16 @@ return view.extend({
 					var isDone = false;
 					var isSuccess = false;
 					if (logTxt) {
-						if (logTxt.indexOf('重拨换IP流程结束') !== -1 ||
-							logTxt.indexOf('释放单用户会话锁') !== -1 ||
-							logTxt.indexOf('重新拨号成功') !== -1) {
-							isDone = true;
-							isSuccess = true;
-						} else if (logTxt.indexOf('已有重拨任务在运行中') !== -1 ||
-							logTxt.indexOf('超时未检测到') !== -1 ||
-							logTxt.indexOf('登录失败') !== -1 ||
-							logTxt.indexOf('未找到') !== -1 ||
+						if (logTxt.indexOf('重新拨号成功') !== -1) {
+							if (logTxt.indexOf('重拨换IP流程结束') !== -1 || logTxt.indexOf('释放单用户会话锁') !== -1) {
+								isDone = true;
+								isSuccess = true;
+							}
+						} else if (logTxt.indexOf('重拨换IP流程结束') !== -1 ||
+							logTxt.indexOf('Traceback') !== -1 ||
+							logTxt.indexOf('已有重拨任务在运行中') !== -1 ||
 							logTxt.indexOf('处于关闭禁用状态') !== -1 ||
-							logTxt.indexOf('处于禁用状态') !== -1 ||
-							logTxt.indexOf('未配置') !== -1 ||
-							logTxt.indexOf('Traceback') !== -1) {
+							logTxt.indexOf('未配置') !== -1) {
 							isDone = true;
 							isSuccess = false;
 						}
@@ -449,7 +506,8 @@ return view.extend({
 								var raw = (res && res.stdout) ? res.stdout : res;
 								var s = JSON.parse(raw || '{}');
 								if (s.running === false) {
-									finishPolling(isSuccess);
+									var success = (logTxt && logTxt.indexOf('重新拨号成功') !== -1);
+									finishPolling(success);
 								}
 							} catch(e) {}
 						});
@@ -563,18 +621,20 @@ return view.extend({
 			});
 		};
 
-		// 检查 GitHub 最新版本
-		window.checkPluginUpdate = function() {
+		// 检查 GitHub 最新版本 (isAuto: 每次进入插件时是否为静默自动检测)
+		window.checkPluginUpdate = function(isAuto) {
 			var btn = document.getElementById('btn_check_update');
 			var tip = document.getElementById('check_update_tip');
-			if (tip) tip.innerHTML = '';
-			if (btn) {
-				btn.disabled = true;
-				btn.innerText = '⏳ ' + _('正在检查最新版本...');
+			if (!isAuto) {
+				if (tip) tip.innerHTML = '';
+				if (btn) {
+					btn.disabled = true;
+					btn.innerText = '⏳ ' + _('正在检查最新版本...');
+				}
 			}
 
 			fs.exec('/usr/bin/modem_redial', ['--check-update']).then(function(res) {
-				if (btn) {
+				if (!isAuto && btn) {
 					btn.disabled = false;
 					btn.innerText = '🚀 ' + _('检查更新');
 				}
@@ -584,31 +644,45 @@ return view.extend({
 				try {
 					info = JSON.parse(raw || '{}');
 				} catch(e) {
-					if (tip) {
-						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('解析更新信息失败') + '</span>';
-					} else {
-						ui.addNotification(null, E('p', _('解析更新信息失败: ') + raw));
+					if (!isAuto) {
+						if (tip) {
+							tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('解析更新信息失败') + '</span>';
+						} else {
+							ui.addNotification(null, E('p', _('解析更新信息失败: ') + raw));
+						}
 					}
 					return;
 				}
 
 				if (!info.success) {
-					if (tip) {
-						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + (info.error || _('检查更新失败')) + '</span>';
-					} else {
-						ui.addNotification(null, E('p', _('检查更新失败: ') + (info.error || _('无法连接 GitHub'))));
+					if (!isAuto) {
+						if (tip) {
+							tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + (info.error || _('检查更新失败')) + '</span>';
+						} else {
+							ui.addNotification(null, E('p', _('检查更新失败: ') + (info.error || _('无法连接 GitHub'))));
+						}
 					}
 					return;
 				}
 
 				if (!info.has_update) {
-					if (tip) {
+					if (!isAuto && tip) {
 						tip.innerHTML = '<span style="color:#2da44e;font-size:13px;font-weight:600;">✅ ' + _('已经是最新版') + '</span>';
 					}
 					return;
 				}
 
-				// 发现新版本，弹出确认弹窗
+				// 发现新版本！
+				if (tip) {
+					tip.innerHTML = '<span style="color:#1890ff;font-size:12px;font-weight:600;">✨ 发现新版本 ' + info.latest_version + '</span>';
+				}
+
+				// 若当前已有日志模态层展示（如正在重拨或看日志），不强制覆盖阻断用户
+				if (document.getElementById('modem_redial_modal_log')) {
+					return;
+				}
+
+				// 自动弹出更新悬浮层
 				var notesContent = info.release_notes ? [
 					E('div', { 'style': 'font-size:12px;color:#888;margin-top:10px;margin-bottom:4px;' }, _('更新说明:')),
 					E('pre', { 'style': 'background:#f7f7f7;border:1px solid #e8e8e8;padding:8px 12px;border-radius:4px;max-height:160px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;font-size:12px;' }, [ info.release_notes ])
@@ -640,14 +714,16 @@ return view.extend({
 					])
 				]);
 			}).catch(function(err) {
-				if (btn) {
-					btn.disabled = false;
-					btn.innerText = '🚀 ' + _('检查更新');
-				}
-				if (tip) {
-					tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('检查失败: ') + (err.message || err) + '</span>';
-				} else {
-					ui.addNotification(null, E('p', _('请求检查更新出错: ') + (err.message || err)));
+				if (!isAuto) {
+					if (btn) {
+						btn.disabled = false;
+						btn.innerText = '🚀 ' + _('检查更新');
+					}
+					if (tip) {
+						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('检查失败: ') + (err.message || err) + '</span>';
+					} else {
+						ui.addNotification(null, E('p', _('请求检查更新出错: ') + (err.message || err)));
+					}
 				}
 			});
 		};
@@ -876,6 +952,11 @@ return view.extend({
 				}, 600);
 			}
 		} catch(e) {}
+
+		// 每次进入插件，自动检查更新：若有新版本则自动弹出更新悬浮层，无新版本则静默无提示
+		setTimeout(function() {
+			window.checkPluginUpdate(true);
+		}, 1000);
 
 		return m.render();
 	}
