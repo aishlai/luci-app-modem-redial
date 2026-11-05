@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.6.0';
+var PLUGIN_VERSION = 'v1.6.1';
 
 function formatConnStatus(status) {
 	if (!status || status === '未知') return _('未知');
