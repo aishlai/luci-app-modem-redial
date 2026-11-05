@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.3.5';
+var PLUGIN_VERSION = 'v1.3.6';
 
 return view.extend({
 	load: function() {
@@ -157,11 +157,13 @@ return view.extend({
 		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.Value, 'cron_time', _('Cron 表达式'));
 		o.depends({ 'enabled': '1', 'cron_enabled': '1' });
 		o.default = '0 4 * * *';
 		o.description = _('标准 Crontab 5位表达式，例如：<code>0 4 * * *</code> (每天凌晨4点重拨换IP)；<code>0 */6 * * *</code> (每6小时重拨一次)');
+		o.retain = true;
 
 		// 6. UDP 连通性监测与 QoS 自动重拨 (仅启用插件时可见)
 		o = s.option(form.DummyValue, '_header_udp');
@@ -177,6 +179,7 @@ return view.extend({
 		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
+		o.retain = true;
 		o.description = _('后台定期测试多个可靠公共节点的 UDP 双向通讯。当全部目标 UDP 均无法连通（疑似被运营商 QoS 限制/断流）时，自动触发光猫重拨换 IP。');
 
 		o = s.option(form.Value, 'udp_check_interval', _('检测间隔时间 (秒)'));
@@ -186,6 +189,7 @@ return view.extend({
 		o.placeholder = '60';
 		o.description = _('每隔多少秒执行一次 UDP 连通性检测，默认 60 秒（推荐 60 ~ 300 秒）。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.Value, 'udp_fail_threshold', _('连续失败重拨阈值'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
@@ -194,6 +198,7 @@ return view.extend({
 		o.placeholder = '2';
 		o.description = _('连续多少次检测全部目标均不通时才触发重拨，避免偶发网络抖动误触发，默认 2 次。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.Value, 'udp_cooldown', _('重拨后冷却时间 (秒)'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
@@ -202,11 +207,13 @@ return view.extend({
 		o.placeholder = '180';
 		o.description = _('触发重拨换 IP 成功后，暂停检测的冷却时间，给新网络足够的稳定时间，默认 180 秒。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.DynamicList, 'udp_targets', _('UDP 检测目标列表'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.placeholder = '223.5.5.5:53';
 		o.description = _('支持格式为 <code>IP/域名:端口</code>，自动识别常见协议（53: DNS, 3478: STUN, 123: NTP）。只要有任意一个目标通畅即视为网络正常。');
+		o.retain = true;
 
 		o = s.option(form.Button, '_btn_test_udp', _('连通性测试'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
@@ -222,6 +229,7 @@ return view.extend({
 		o.placeholder = '/etc/modem_redial_qos.log';
 		o.description = _('独立记录因 UDP QoS 阻断而触发的重拨日志。保存在 <code>/etc/</code> 目录下即使路由器重启也不会丢失。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.DummyValue, '_qos_log_view', _('QoS 触发重拨历史日志'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
@@ -253,6 +261,7 @@ return view.extend({
 		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
+		o.retain = true;
 		o.description = _('当发生重拨换 IP、UDP QoS 阻断或任务异常时，通过 <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">ntfy.sh</a> 或自建 ntfy 服务器向手机/桌面推送实时通知。');
 
 		o = s.option(form.Value, 'ntfy_server', _('Ntfy 服务器地址'));
@@ -261,37 +270,48 @@ return view.extend({
 		o.placeholder = 'https://ntfy.sh';
 		o.description = _('默认为官方公共服务器 <code>https://ntfy.sh</code>，若使用自建实例请填写您的完整服务器 URL。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.Value, 'ntfy_topic', _('Topic 主题名称'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.placeholder = 'my_modem_alerts_xxxx';
 		o.description = _('ntfy 消息订阅主题（建议使用难以猜测的独特名称以防泄露，可在手机 ntfy App 中订阅此主题）。');
 		o.rmempty = false;
+		o.retain = true;
 
 		o = s.option(form.Value, 'ntfy_token', _('访问令牌 Token (可选)'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.password = true;
 		o.placeholder = 'tk_... (若为公开主题可留空)';
 		o.description = _('若您的主题开启了权限保护，或自建服务器要求认证，请在此填写 Bearer Access Token。');
+		o.retain = true;
 
 		o = s.option(form.Flag, 'notify_event_manual', _('手动重拨完成时通知'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
+		o.rmempty = false;
+		o.retain = true;
 		o.description = _('在 WebUI 点击「⚡ 立即重拨换IP」或手动执行重拨成功后推送新 IP 信息。');
 
 		o = s.option(form.Flag, 'notify_event_cron', _('定时自动重拨完成时通知'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
+		o.rmempty = false;
+		o.retain = true;
 		o.description = _('凌晨 Cron 计划任务定时重拨成功后推送新 IP 信息（若夜间不想被打扰可关闭此项）。');
 
 		o = s.option(form.Flag, 'notify_event_qos', _('UDP QoS 阻断触发换 IP 时通知'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
+		o.rmempty = false;
+		o.retain = true;
 		o.description = _('当检测到遭遇运营商 UDP QoS 阻断并自动重新拨号换 IP 完成时推送警报与新 IP。');
 
 		o = s.option(form.Flag, 'notify_event_fail', _('重拨失败告警通知'));
 		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
+		o.rmempty = false;
+		o.retain = true;
 		o.description = _('无论手动、定时还是 QoS 触发，当重拨过程遭遇失败（如光猫登录失败、超时未连上等）时，立即发送高优先级告警。');
 
 		o = s.option(form.DummyValue, '_btn_test_ntfy_view', _('测试通知'));
@@ -394,13 +414,6 @@ return view.extend({
 
 		// 挂载全局交互脚本
 		window.triggerModemRedial = function() {
-			var enabledWidget = document.querySelector('input[name="cbid.modem_redial.config.enabled"]') ||
-			                    document.getElementById('cbid.modem_redial.config.enabled');
-			if (enabledWidget && !enabledWidget.checked) {
-				ui.addNotification(null, E('p', _('插件当前处于关闭状态，请先开启「启用插件」并保存应用！')));
-				return;
-			}
-
 			if (!confirm('确定立即触发光猫重新拨号换IP吗？拨号期间宽带会短暂中断 3~5 秒。')) return;
 
 			var btn = document.getElementById('btn_manual_redial');
