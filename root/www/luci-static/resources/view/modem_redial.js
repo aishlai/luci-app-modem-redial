@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.3';
+var PLUGIN_VERSION = 'v1.5.4';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -210,8 +210,8 @@ return view.extend({
 		o.rawhtml = true;
 		o.cfgvalue = function() {
 			var initLiveLog = (data[3] || '');
-			return '<div style="margin-top:5px;">' +
-				'<textarea id="modem_redial_live_qos_log" class="cbi-input-textarea" style="width:100%;height:310px;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;line-height:1.45;box-sizing:border-box;resize:vertical;" readonly="readonly" placeholder="' + _('暂无实时监测数据。后台守护进程每轮检测后将自动在此覆盖刷新，也可点击下方「⚡ 立即探测一轮」...') + '">' +
+			return '<div style="margin-top:5px;width:100%;overflow-x:auto;">' +
+				'<textarea id="modem_redial_live_qos_log" class="cbi-input-textarea" cols="100" wrap="off" style="width:100%;min-width:100ch;height:310px;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;line-height:1.45;box-sizing:border-box;white-space:pre;overflow-x:auto;resize:vertical;" readonly="readonly" placeholder="' + _('暂无实时监测数据。后台守护进程每轮检测后将自动在此覆盖刷新，也可点击下方「⚡ 立即探测一轮」...') + '">' +
 				initLiveLog +
 				'</textarea>' +
 				'<div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">' +
@@ -235,8 +235,8 @@ return view.extend({
 		o.rawhtml = true;
 		o.cfgvalue = function() {
 			var initLog = (data[2] || '');
-			return '<div style="margin-top:5px;">' +
-				'<textarea id="modem_redial_qos_log" class="cbi-input-textarea" style="width:100%;height:150px;font-family:monospace;font-size:12px;background:#f8f9fa;color:#333;line-height:1.4;box-sizing:border-box;resize:vertical;" readonly="readonly" placeholder="' + _('暂无 UDP QoS 触发重拨记录 (仅在全部目标检测失败并执行重拨换 IP 时记录)...') + '">' +
+			return '<div style="margin-top:5px;width:100%;overflow-x:auto;">' +
+				'<textarea id="modem_redial_qos_log" class="cbi-input-textarea" cols="100" wrap="off" style="width:100%;min-width:100ch;height:150px;font-family:monospace;font-size:12px;background:#f8f9fa;color:#333;line-height:1.4;box-sizing:border-box;white-space:pre;overflow-x:auto;resize:vertical;" readonly="readonly" placeholder="' + _('暂无 UDP QoS 触发重拨记录 (仅在全部目标检测失败并执行重拨换 IP 时记录)...') + '">' +
 				initLog +
 				'</textarea>' +
 				'<div style="margin-top:8px;text-align:right;">' +
@@ -351,13 +351,17 @@ return view.extend({
 							'style': isTriggerRedial ? 'color:#1890ff;font-weight:600;' : 'color:#666;'
 						}, isTriggerRedial ? '⏳ ' + _('正在启动后台重拨换IP任务...') : '📜 ' + _('实时执行日志内容 (最近输出):'))
 					]),
-					E('textarea', {
-						'id': 'modem_redial_modal_log',
-						'class': 'cbi-input-textarea',
-						'readonly': 'readonly',
-						'style': 'width:100%;height:320px;background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:4px;box-sizing:border-box;resize:vertical;',
-						'placeholder': _('暂无执行日志...')
-					}),
+					E('div', { 'style': 'width:100%;overflow-x:auto;' }, [
+						E('textarea', {
+							'id': 'modem_redial_modal_log',
+							'class': 'cbi-input-textarea',
+							'readonly': 'readonly',
+							'cols': '100',
+							'wrap': 'off',
+							'style': 'width:100%;min-width:100ch;height:320px;background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:4px;box-sizing:border-box;white-space:pre;overflow-x:auto;resize:vertical;',
+							'placeholder': _('暂无执行日志...')
+						})
+					]),
 					E('div', { 'class': 'right', 'style': 'margin-top:14px;' }, [
 						E('button', {
 							'class': 'btn cbi-button-reset',
@@ -924,94 +928,112 @@ return view.extend({
 				params.push(downloadUrl);
 			}
 
-			// 异步启动后台升级任务，毫秒级返回
-			fs.exec('/usr/bin/modem_redial', params).then(function() {
-				var pollCount = 0;
-				var maxPolls = 60; // 最多轮询 60 秒
+			var pollCount = 0;
+			var maxPolls = 60; // 最多轮询 60 秒
+			var isDone = false;
 
-				var updateTimer = setInterval(function() {
-					pollCount++;
+			// 1. 立即启动前端进度轮询 (使用轻量高效的 fs.read 读取内存临时状态，绝不依赖阻塞的 exec)
+			var updateTimer = setInterval(function() {
+				pollCount++;
 
-					fs.exec('/usr/bin/modem_redial', ['--get-update-status']).then(function(res) {
-						var raw = (res && res.stdout) ? res.stdout.trim() : '';
-						var status = {};
-						try {
-							status = JSON.parse(raw || '{}');
-						} catch(e) {}
+				L.resolveDefault(fs.read('/tmp/log/modem_redial_update.status'), '').then(function(raw) {
+					var status = {};
+					try {
+						status = JSON.parse((raw || '').trim());
+					} catch(e) {}
 
-						var titleElem = document.getElementById('upgrade_modal_title');
-						var descElem = document.getElementById('upgrade_modal_desc');
-						var barElem = document.getElementById('upgrade_progress_bar');
-						var iconElem = document.getElementById('upgrade_modal_icon');
+					var titleElem = document.getElementById('upgrade_modal_title');
+					var descElem = document.getElementById('upgrade_modal_desc');
+					var barElem = document.getElementById('upgrade_progress_bar');
+					var iconElem = document.getElementById('upgrade_modal_icon');
 
-						if (descElem && status.message) {
-							descElem.innerText = status.message;
+					if (descElem && status.message) {
+						descElem.innerText = status.message;
+					}
+
+					if (status.stage === 'downloading') {
+						if (barElem) barElem.style.width = '45%';
+					} else if (status.stage === 'installing') {
+						if (barElem) barElem.style.width = '80%';
+					}
+
+					if (status.success === true) {
+						if (isDone) return;
+						isDone = true;
+						clearInterval(updateTimer);
+						window._isUpgrading = false;
+						if (barElem) {
+							barElem.style.width = '100%';
+							barElem.style.background = '#28a745';
 						}
-
-						if (status.stage === 'downloading') {
-							if (barElem) barElem.style.width = '45%';
-						} else if (status.stage === 'installing') {
-							if (barElem) barElem.style.width = '80%';
+						if (iconElem) iconElem.innerText = '🎉';
+						if (titleElem) {
+							titleElem.style.color = '#28a745';
+							titleElem.innerText = _('插件已成功升级至最新版本！');
 						}
-
-						if (status.success === true) {
-							clearInterval(updateTimer);
-							window._isUpgrading = false;
-							if (barElem) {
-								barElem.style.width = '100%';
-								barElem.style.background = '#28a745';
-							}
-							if (iconElem) iconElem.innerText = '🎉';
-							if (titleElem) {
-								titleElem.style.color = '#28a745';
-								titleElem.innerText = _('插件已成功升级至最新版本！');
-							}
-							if (descElem) {
-								descElem.innerText = _('系统已恢复您的全部配置，页面将在 2.5 秒后自动刷新...');
-							}
-							setTimeout(function() {
-								location.reload();
-							}, 2500);
-							return;
+						if (descElem) {
+							descElem.innerText = _('系统已恢复您的全部配置，页面将在 2.5 秒后自动刷新...');
 						}
+						setTimeout(function() {
+							location.reload();
+						}, 2500);
+						return;
+					}
 
-						if (status.success === false || status.stage === 'error') {
-							clearInterval(updateTimer);
-							window._isUpgrading = false;
-							ui.showModal(_('升级失败'), [
-								E('div', { 'style': 'padding:15px 5px;' }, [
-									E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (status.error || _('升级过程中发生错误'))),
-									E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
-										E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
-									])
+					if (status.success === false || status.stage === 'error') {
+						if (isDone) return;
+						isDone = true;
+						clearInterval(updateTimer);
+						window._isUpgrading = false;
+						ui.showModal(_('升级失败'), [
+							E('div', { 'style': 'padding:15px 5px;' }, [
+								E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (status.error || _('升级过程中发生错误'))),
+								E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+									E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
 								])
-							]);
+							])
+						]);
+						return;
+					}
+
+					if (pollCount >= maxPolls) {
+						if (isDone) return;
+						isDone = true;
+						clearInterval(updateTimer);
+						window._isUpgrading = false;
+						location.reload();
+					}
+				});
+			}, 1000);
+
+			// 2. 异步触发后台升级执行 (若遇到网络代理偶发超时或会话断开，结合状态文件放行，彻底消除假报错)
+			fs.exec('/usr/bin/modem_redial', params).then(function() {
+				// 后台启动命令正常返回，继续交由轮询处理
+			}).catch(function(err) {
+				if (isDone) return;
+				// 兜底校验当前任务是否其实已经在进行或已成功
+				L.resolveDefault(fs.read('/tmp/log/modem_redial_update.status'), '').then(function(raw) {
+					try {
+						var st = JSON.parse((raw || '').trim());
+						if (st.stage === 'downloading' || st.stage === 'installing' || st.success === true) {
+							// 后台正在平稳推进或已成功，忽略此 XHR 超时假报警
 							return;
 						}
+					} catch(e) {}
 
-						if (pollCount >= maxPolls) {
-							clearInterval(updateTimer);
-							window._isUpgrading = false;
-							location.reload();
-						}
-					}).catch(function() {
-						if (pollCount >= maxPolls) {
-							clearInterval(updateTimer);
-							window._isUpgrading = false;
-							location.reload();
-						}
-					});
-				}, 1000);
-			}).catch(function(err) {
-				window._isUpgrading = false;
-				ui.showModal(_('升级发生异常'), [
-					E('div', { 'style': 'padding:15px 5px;' }, [
-						E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
-						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
-							E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+					if (isDone) return;
+					isDone = true;
+					clearInterval(updateTimer);
+					window._isUpgrading = false;
+					ui.showModal(_('升级发生异常'), [
+						E('div', { 'style': 'padding:15px 5px;' }, [
+							E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
+							E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+								E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+							])
 						])
-					])
-				]);
+					]);
+				});
 			});
 		};
 
