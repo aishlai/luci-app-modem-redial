@@ -4,14 +4,15 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.7';
+var PLUGIN_VERSION = 'v1.4.8';
 
 return view.extend({
 	load: function() {
 		return Promise.all([
 			L.resolveDefault(fs.read('/tmp/log/modem_redial.log'), ''),
 			L.resolveDefault(fs.exec('/usr/bin/modem_redial', ['--status']), {}),
-			L.resolveDefault(fs.read('/etc/modem_redial_qos.log'), '')
+			L.resolveDefault(fs.read('/etc/modem_redial_qos.log'), ''),
+			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '')
 		]);
 	},
 
@@ -198,12 +199,26 @@ return view.extend({
 		o.description = _('支持格式为 <code>IP/域名:端口</code>，自动识别常见协议（53: DNS, 3478: STUN, 123: NTP）。只要有任意一个目标通畅即视为网络正常。');
 		o.retain = true;
 
-		o = s2.taboption('qos', form.Button, '_btn_test_udp', _('连通性测试'));
+		o = s2.taboption('qos', form.DummyValue, '_live_qos_log_view', _('实时连通性监测日志'));
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
-		o.inputtitle = _('⚡ 立即测试当前 UDP 连通性');
-		o.inputstyle = 'apply';
-		o.onclick = function() {
-			window.testCurrentUdp();
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			var initLiveLog = (data[3] || '');
+			return '<div style="margin-top:5px;">' +
+				'<textarea id="modem_redial_live_qos_log" class="cbi-input-textarea" style="width:100%;height:190px;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;line-height:1.45;box-sizing:border-box;resize:vertical;" readonly="readonly" placeholder="' + _('暂无实时监测数据。后台守护进程每轮检测后将自动在此覆盖刷新，也可点击下方「⚡ 立即探测一轮」...') + '">' +
+				initLiveLog +
+				'</textarea>' +
+				'<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+					'<div style="font-size:12px;color:#888;">' +
+						_('💡 说明: 本日志保存在内存中 (/tmp)，每轮检测自动刷新覆盖，不消耗闪存寿命。') +
+					'</div>' +
+					'<div>' +
+						'<button type="button" class="btn cbi-button cbi-button-action" id="btn_refresh_live_qos_log" onclick="window.refreshLiveQosLog()" style="margin-right:8px;">🔄 ' + _('刷新实时日志') + '</button>' +
+						'<button type="button" class="btn cbi-button cbi-button-apply" id="btn_run_single_probe" onclick="window.runSingleUdpProbe()" style="margin-right:8px;">⚡ ' + _('立即探测一轮') + '</button>' +
+						'<button type="button" class="btn cbi-button" id="btn_modal_test_udp" onclick="window.testCurrentUdp()">📊 ' + _('详细体检弹窗') + '</button>' +
+					'</div>' +
+				'</div>' +
+			'</div>';
 		};
 
 		o = s2.taboption('qos', form.Value, 'udp_log_file', _('QoS 独立持久化日志路径'));
@@ -866,6 +881,12 @@ return view.extend({
 						])
 					])
 				]);
+
+				// 同步更新实时监测日志显示框
+				L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
+					var liveBox = document.getElementById('modem_redial_live_qos_log');
+					if (liveBox && txt) liveBox.value = txt;
+				});
 			}).catch(function(err) {
 				ui.showModal(_('测试发生异常'), [
 					E('div', { 'style': 'padding:15px 5px;' }, [
@@ -938,7 +959,76 @@ return view.extend({
 			});
 		};
 
-		// 刷新与清空 QoS 日志
+		// 刷新实时监测日志 (内存临时日志)
+		window.refreshLiveQosLog = function() {
+			var liveBox = document.getElementById('modem_redial_live_qos_log');
+			var btn = document.getElementById('btn_refresh_live_qos_log');
+			if (btn) {
+				btn.disabled = true;
+				btn.innerText = '⏳ ' + _('读取中...');
+			}
+			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
+				if (liveBox) {
+					liveBox.value = txt || _('暂无实时监测数据。');
+				}
+				if (btn) {
+					btn.innerText = '✅ ' + _('已刷新');
+					setTimeout(function() {
+						btn.disabled = false;
+						btn.innerText = '🔄 ' + _('刷新实时日志');
+					}, 800);
+				}
+			}).catch(function() {
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '🔄 ' + _('刷新实时日志');
+				}
+			});
+		};
+
+		// 立即探测一轮 UDP 并同步展示最新单轮结果
+		window.runSingleUdpProbe = function() {
+			if (window._isProbingUdp) return;
+			window._isProbingUdp = true;
+
+			var btn = document.getElementById('btn_run_single_probe');
+			var liveBox = document.getElementById('modem_redial_live_qos_log');
+
+			if (btn) {
+				btn.disabled = true;
+				btn.innerText = '⏳ ' + _('正在探测...');
+			}
+			if (liveBox) {
+				liveBox.value = '>>> ' + _('正在向所有目标节点发送 UDP 探测包，请稍候...') + '\n' + (liveBox.value || '');
+			}
+
+			fs.exec('/usr/bin/modem_redial', ['--test-udp']).then(function(res) {
+				window._isProbingUdp = false;
+				if (btn) {
+					btn.innerText = '✅ ' + _('探测完成');
+					setTimeout(function() {
+						btn.disabled = false;
+						btn.innerText = '⚡ ' + _('立即探测一轮');
+					}, 1200);
+				}
+				L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
+					if (liveBox && txt) {
+						liveBox.value = txt;
+					}
+				});
+			}).catch(function(err) {
+				window._isProbingUdp = false;
+				if (btn) {
+					btn.disabled = false;
+					btn.innerText = '⚡ ' + _('立即探测一轮');
+				}
+				if (liveBox) {
+					liveBox.value = '❌ ' + _('探测执行失败: ') + (err.message || err);
+				}
+			});
+		};
+
+		// 刷新与清空 QoS 历史日志
 		window.refreshQosLog = function() {
 			var qosBox = document.getElementById('modem_redial_qos_log');
 			if (!qosBox) return;
@@ -1020,6 +1110,18 @@ return view.extend({
 		setTimeout(function() {
 			window.checkPluginUpdate(true);
 		}, 1000);
+
+		// 周期性轮询刷新 UDP 实时监测日志 (每 5 秒在后台静默读取一次最新日志文件)
+		setInterval(function() {
+			var liveBox = document.getElementById('modem_redial_live_qos_log');
+			if (!liveBox || liveBox.offsetParent === null) return;
+			if (liveBox.matches && liveBox.matches(':focus')) return;
+			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
+				if (liveBox && txt && liveBox.value !== txt) {
+					liveBox.value = txt;
+				}
+			});
+		}, 5000);
 
 		return m.render();
 	}

@@ -5,6 +5,7 @@
 			"uci": [ "modem_redial" ],
 			"file": {
 				"/tmp/log/modem_redial.log": [ "read" ],
+				"/tmp/log/modem_redial_live_qos.log": [ "read" ],
 				"/tmp/run/modem_redial.pid": [ "read" ],
 				"/etc/modem_redial_qos.log": [ "read" ],
 				"/usr/bin/modem_redial": [ "exec" ],
@@ -20,6 +21,7 @@
 			"uci": [ "modem_redial" ],
 			"file": {
 				"/tmp/log/modem_redial.log": [ "write" ],
+				"/tmp/log/modem_redial_live_qos.log": [ "write" ],
 				"/etc/modem_redial_qos.log": [ "write" ],
 				"/usr/bin/modem_redial": [ "exec" ],
 				"/usr/bin/modem_redial *": [ "exec" ],
