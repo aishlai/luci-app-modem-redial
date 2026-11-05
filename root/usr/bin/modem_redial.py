@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.4.5-1"
+__version__ = "1.4.6-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -811,6 +811,7 @@ def redial_wan(
         except Exception:
             pass
         log("[*] 重拨换IP流程结束。", log_file)
+        remove_pid()
 
         # 触发 Ntfy 消息通知（在会话完全注销、网络恢复后发出）
         notify_redial_result(

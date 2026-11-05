@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.5';
+var PLUGIN_VERSION = 'v1.4.6';
 
 return view.extend({
 	load: function() {
@@ -321,6 +321,9 @@ return view.extend({
 				window._autoCloseModalTimer = null;
 			}
 			window._isRedialTriggeredManually = !!isTriggerRedial;
+			if (!isTriggerRedial) {
+				window._redialJustFinished = false;
+			}
 
 			var title = isTriggerRedial ? _('光猫重新拨号执行日志') : _('光猫重拨助手运行日志');
 
@@ -358,6 +361,7 @@ return view.extend({
 									clearInterval(window._autoCloseModalTimer);
 									window._autoCloseModalTimer = null;
 								}
+								window._redialJustFinished = false;
 								ui.hideModal();
 							}
 						}, _('关闭'))
@@ -381,6 +385,14 @@ return view.extend({
 
 		// 全局日志轮询函数
 		window.startLogPolling = function(isFromManualTrigger) {
+			// 若当前正处于重拨成功后的 5 秒自动关闭倒计时中，或刚结束重拨，绝不重复拉起轮询或篡改按钮状态
+			if (window._autoCloseModalTimer || window._redialJustFinished) {
+				return;
+			}
+			if (window._modemRedialTimer) {
+				return;
+			}
+
 			if (typeof isFromManualTrigger !== 'undefined') {
 				window._isRedialTriggeredManually = !!isFromManualTrigger;
 			}
@@ -393,24 +405,17 @@ return view.extend({
 				btn.innerText = '⏳ ' + _('正在重拨中...');
 			}
 
-			if (window._modemRedialTimer) {
-				clearInterval(window._modemRedialTimer);
-				window._modemRedialTimer = null;
-			}
-			if (window._autoCloseModalTimer) {
-				clearInterval(window._autoCloseModalTimer);
-				window._autoCloseModalTimer = null;
-			}
-
 			function finishPolling(isSuccess) {
 				if (window._modemRedialTimer) {
 					clearInterval(window._modemRedialTimer);
 					window._modemRedialTimer = null;
 				}
-				if (window._autoCloseModalTimer) {
-					clearInterval(window._autoCloseModalTimer);
-					window._autoCloseModalTimer = null;
-				}
+
+				// 标记重拨已结束，防止 status 异步回调重新触发 startLogPolling 导致按钮状态反复跳闪
+				window._redialJustFinished = true;
+				setTimeout(function() {
+					window._redialJustFinished = false;
+				}, 15000);
 
 				var b = document.getElementById('btn_manual_redial');
 				if (b) {
@@ -420,7 +425,7 @@ return view.extend({
 
 				setTimeout(function() {
 					window.refreshModemStatus();
-				}, 1000);
+				}, 800);
 
 				var isManual = !!window._isRedialTriggeredManually;
 
@@ -436,6 +441,9 @@ return view.extend({
 							}
 						};
 						updateCountdownBadge();
+						if (window._autoCloseModalTimer) {
+							clearInterval(window._autoCloseModalTimer);
+						}
 						window._autoCloseModalTimer = setInterval(function() {
 							if (!document.getElementById('modem_redial_modal_log')) {
 								clearInterval(window._autoCloseModalTimer);
@@ -446,6 +454,7 @@ return view.extend({
 							if (countdown <= 0) {
 								clearInterval(window._autoCloseModalTimer);
 								window._autoCloseModalTimer = null;
+								window._redialJustFinished = false;
 								ui.hideModal();
 							} else {
 								updateCountdownBadge();
@@ -503,17 +512,25 @@ return view.extend({
 								var s = JSON.parse(raw || '{}');
 								if (s.running === false) {
 									var success = (logTxt && logTxt.indexOf('重新拨号成功') !== -1);
+									clearInterval(window._modemRedialTimer);
+									window._modemRedialTimer = null;
 									finishPolling(success);
+									return;
 								}
 							} catch(e) {}
 						});
 					}
 
 					if (isDone || pollCount >= maxPolls) {
+						clearInterval(window._modemRedialTimer);
+						window._modemRedialTimer = null;
 						finishPolling(isSuccess);
+						return;
 					}
 				}).catch(function(err) {
 					if (pollCount >= maxPolls) {
+						clearInterval(window._modemRedialTimer);
+						window._modemRedialTimer = null;
 						finishPolling(false);
 					}
 				});
@@ -523,6 +540,16 @@ return view.extend({
 		// 挂载全局交互脚本
 		window.triggerModemRedial = function() {
 			if (!confirm('确定立即触发光猫重新拨号换IP吗？拨号期间宽带会短暂中断 3~5 秒。')) return;
+
+			window._redialJustFinished = false;
+			if (window._autoCloseModalTimer) {
+				clearInterval(window._autoCloseModalTimer);
+				window._autoCloseModalTimer = null;
+			}
+			if (window._modemRedialTimer) {
+				clearInterval(window._modemRedialTimer);
+				window._modemRedialTimer = null;
+			}
 
 			var btn = document.getElementById('btn_manual_redial');
 			if (btn) {
@@ -610,7 +637,8 @@ return view.extend({
 					}
 					if (triggerEl) triggerEl.innerText = data.trigger || '-';
 
-					if (data.running) {
+					// 严格检查：当且仅当非刚完成重拨且无活动倒计时/轮询时，才跟随 running 开启轮询
+					if (data.running && !window._autoCloseModalTimer && !window._redialJustFinished && !window._modemRedialTimer) {
 						window.startLogPolling();
 					}
 				} catch(e) {}
