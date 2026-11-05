@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.6-1"
+__version__ = "1.5.7-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
@@ -490,8 +490,11 @@ class HuaweiONTClient:
         return False
 
 
-def query_status_json(router_ip: str, username: str, password: str, wan_name: str) -> str:
-    """输出 JSON 格式状态供 LuCI 前端异步读取"""
+STATUS_CACHE_FILE = "/tmp/log/modem_redial_status_cache.json"
+
+
+def query_status_json(router_ip: str, username: str, password: str, wan_name: str, force: bool = False) -> str:
+    """输出 JSON 格式状态供 LuCI 前端异步读取 (支持 5 秒短时缓存，避免快速重入时重复登录光猫)"""
     uci_conf = load_uci_config()
     if uci_conf.get("enabled", "0") != "1":
         return json.dumps({
@@ -522,28 +525,55 @@ def query_status_json(router_ip: str, username: str, password: str, wan_name: st
             "running": False
         }, ensure_ascii=False)
 
+    # 短时 5 秒缓存检查 (快速刷新或页面刚载入时不重复挤占光猫会话)
+    now = time.time()
+    if not force and os.path.exists(STATUS_CACHE_FILE):
+        try:
+            with open(STATUS_CACHE_FILE, "r", encoding="utf-8") as f:
+                cdata = json.load(f)
+            if now - cdata.get("_time", 0) < 5:
+                del cdata["_time"]
+                return json.dumps(cdata, ensure_ascii=False)
+        except Exception:
+            pass
+
     client = HuaweiONTClient(base_url=router_ip, username=username, password=password)
+    ret_obj = {}
     try:
         if not client.login():
-            return json.dumps({"status": "登录失败", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}, ensure_ascii=False)
-        target = client.find_wan(wan_name)
-        if not target:
-            return json.dumps({"status": "未找到指定WAN", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}, ensure_ascii=False)
-        return json.dumps({
-            "status": target["status"],
-            "ip": target["ip"],
-            "trigger": target["trigger"],
-            "wan": target["name"],
-            "domain": target["domain"],
-            "running": False
-        }, ensure_ascii=False)
+            ret_obj = {"status": "登录失败", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}
+        else:
+            target = client.find_wan(wan_name)
+            if not target:
+                ret_obj = {"status": "未找到指定WAN", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}
+            else:
+                ret_obj = {
+                    "status": target["status"],
+                    "ip": target["ip"],
+                    "trigger": target["trigger"],
+                    "wan": target["name"],
+                    "domain": target["domain"],
+                    "running": False
+                }
     except Exception as e:
-        return json.dumps({"status": f"错误: {e}", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}, ensure_ascii=False)
+        ret_obj = {"status": f"错误: {e}", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}
     finally:
         try:
             client.logout()
         except Exception:
             pass
+
+    # 写入短时缓存
+    try:
+        os.makedirs(os.path.dirname(STATUS_CACHE_FILE), exist_ok=True)
+        ret_obj["_time"] = now
+        with open(STATUS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(ret_obj, f, ensure_ascii=False)
+        del ret_obj["_time"]
+    except Exception:
+        pass
+
+    return json.dumps(ret_obj, ensure_ascii=False)
 
 
 def send_ntfy_notification(
@@ -891,25 +921,103 @@ def parse_version_tuple(v: str):
     return (num_parts, rel_num)
 
 
-def check_github_update() -> dict:
-    """检查 GitHub Releases 是否有新版本"""
+UPDATE_CACHE_FILE = "/tmp/log/modem_redial_update_cache.json"
+CACHE_TTL = 1800  # 30 分钟缓存
+
+
+def check_github_update(force: bool = False) -> dict:
+    """检查 GitHub Releases 是否有新版本 (支持 30 分钟内存级高速缓存与加速镜像)"""
+    current_ver = __version__
+    now = int(time.time())
+
+    # 1. 若非强制刷新，优先读取 30 分钟内的本地有效缓存 (0 毫秒即时返回)
+    if not force and os.path.exists(UPDATE_CACHE_FILE):
+        try:
+            with open(UPDATE_CACHE_FILE, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            cached_time = cached.get("time", 0)
+            if now - cached_time < CACHE_TTL and cached.get("success"):
+                cached_tag = cached.get("latest_version", "")
+                clean_tag = re.sub(r'^[vV]', '', cached_tag)
+                cached["current_version"] = f"v{current_ver.split('-')[0]}"
+                cached["has_update"] = parse_version_tuple(clean_tag) > parse_version_tuple(current_ver)
+                return cached
+        except Exception:
+            pass
+
     import ssl
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    current_ver = __version__
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenWrt-Modem-Redial-Updater",
         "Accept": "application/vnd.github.v3+json"
     }
 
-    # 1. 优先尝试直接访问 GitHub Releases API
-    data = None
+    # 2. 优先通过加速镜像超快速检测最新版本 (超时设为 2.5s，彻底根除 GFW 6s 挂起阻塞)
+    raw_urls = [
+        f"https://ghfast.top/{GITHUB_RAW_VER_URL}",
+        GITHUB_RAW_VER_URL
+    ]
+    remote_ver_str = None
     last_err = None
+    for r_url in raw_urls:
+        try:
+            req = urllib.request.Request(r_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=2.5, context=ctx) as resp:
+                if resp.status == 200:
+                    remote_ver_str = resp.read().decode('utf-8').strip()
+                    if remote_ver_str:
+                        break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if remote_ver_str:
+        clean_tag = re.sub(r'^[vV]', '', remote_ver_str)
+        has_update = parse_version_tuple(clean_tag) > parse_version_tuple(current_ver)
+        main_tag = f"v{clean_tag.split('-')[0]}"
+        clean_tag_rel = clean_tag if '-' in clean_tag else f"{clean_tag}-1"
+        download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{main_tag}/luci-app-modem-redial_{clean_tag_rel}_all.ipk"
+
+        release_notes = ""
+        if has_update:
+            try:
+                req = urllib.request.Request(GITHUB_API_URL, headers=headers)
+                with urllib.request.urlopen(req, timeout=2.5, context=ctx) as resp:
+                    if resp.status == 200:
+                        api_data = json.loads(resp.read().decode('utf-8'))
+                        release_notes = api_data.get("body", "").strip()
+            except Exception:
+                release_notes = "发现新版本可用，建议通过一键升级更新。"
+        else:
+            release_notes = "当前已是最新版本。"
+
+        res_info = {
+            "success": True,
+            "current_version": f"v{current_ver.split('-')[0]}",
+            "latest_version": main_tag,
+            "has_update": has_update,
+            "download_url": download_url,
+            "release_url": f"https://github.com/{GITHUB_REPO}/releases/latest",
+            "release_notes": release_notes,
+            "published_at": "",
+            "time": now
+        }
+        try:
+            os.makedirs(os.path.dirname(UPDATE_CACHE_FILE), exist_ok=True)
+            with open(UPDATE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(res_info, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return res_info
+
+    # 3. 兜底直连 GitHub Releases API (超时 3s)
+    data = None
     try:
         req = urllib.request.Request(GITHUB_API_URL, headers=headers)
-        with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=3.0, context=ctx) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode('utf-8'))
     except Exception as e:
@@ -931,7 +1039,7 @@ def check_github_update() -> dict:
             clean_tag_rel = clean_tag if '-' in clean_tag else f"{clean_tag}-1"
             download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/luci-app-modem-redial_{clean_tag_rel}_all.ipk"
 
-        return {
+        res_info = {
             "success": True,
             "current_version": f"v{current_ver.split('-')[0]}",
             "latest_version": tag_name if tag_name.startswith("v") else f"v{tag_name}",
@@ -939,42 +1047,16 @@ def check_github_update() -> dict:
             "download_url": download_url,
             "release_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
             "release_notes": data.get("body", "").strip(),
-            "published_at": data.get("published_at", "")
+            "published_at": data.get("published_at", ""),
+            "time": now
         }
-
-    # 2. 备选方案：若 API 访问受限（如 GFW 或速率限制），通过镜像查询 main 分支 VERSION 文件
-    raw_urls = [
-        GITHUB_RAW_VER_URL,
-        f"https://ghfast.top/{GITHUB_RAW_VER_URL}"
-    ]
-    remote_ver_str = None
-    for r_url in raw_urls:
         try:
-            req = urllib.request.Request(r_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
-                if resp.status == 200:
-                    remote_ver_str = resp.read().decode('utf-8').strip()
-                    if remote_ver_str:
-                        break
-        except Exception as e:
-            last_err = e
-            continue
-
-    if remote_ver_str:
-        clean_tag = re.sub(r'^[vV]', '', remote_ver_str)
-        has_update = parse_version_tuple(clean_tag) > parse_version_tuple(current_ver)
-        main_tag = f"v{clean_tag.split('-')[0]}"
-        download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{main_tag}/luci-app-modem-redial_{clean_tag}_all.ipk"
-        return {
-            "success": True,
-            "current_version": f"v{current_ver.split('-')[0]}",
-            "latest_version": main_tag,
-            "has_update": has_update,
-            "download_url": download_url,
-            "release_url": f"https://github.com/{GITHUB_REPO}/releases/latest",
-            "release_notes": "通过镜像仓库检测到更新，建议升级。",
-            "published_at": ""
-        }
+            os.makedirs(os.path.dirname(UPDATE_CACHE_FILE), exist_ok=True)
+            with open(UPDATE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(res_info, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return res_info
 
     return {
         "success": False,
@@ -1125,6 +1207,23 @@ def do_github_update(download_url: str = None) -> dict:
         subprocess.run(["/etc/init.d/modem_redial", "restart"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-f", "/tmp/luci-indexcache*"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["rm", "-rf", "/tmp/luci-modulecache/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    # 升级成功后直接写入最新缓存，使页面刷新后瞬间感知「已经是最新版」，彻底杜绝初次进入卡顿
+    try:
+        new_tag = f"v{__version__.split('-')[0]}"
+        post_cache = {
+            "success": True,
+            "current_version": new_tag,
+            "latest_version": new_tag,
+            "has_update": False,
+            "release_notes": "当前已是最新版本。",
+            "time": int(time.time())
+        }
+        os.makedirs(os.path.dirname(UPDATE_CACHE_FILE), exist_ok=True)
+        with open(UPDATE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(post_cache, f, ensure_ascii=False)
     except Exception:
         pass
 
@@ -1452,9 +1551,8 @@ def main():
     parser.add_argument("--start", action="store_true", help="后台异步守护启动重拨 (避免阻塞调用者)")
     parser.add_argument("--cron", action="store_true", help="定时任务执行模式 (严格遵循 enabled/cron_enabled)")
     parser.add_argument("--check-update", action="store_true", help="检查 GitHub 是否有新版本")
+    parser.add_argument("--force", action="store_true", help="强制忽略本地缓存，从网络/设备实时查询")
     parser.add_argument("--do-update", action="store_true", help="一键下载并升级到最新版本")
-    parser.add_argument("--start-update", action="store_true", help="后台异步守护启动升级 (彻底根除 XHR 超时)")
-    parser.add_argument("--get-update-status", action="store_true", help="获取当前升级进度状态 JSON")
     parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
     parser.add_argument("--watchdog", action="store_true", help="运行 UDP 连通性监测后台守护进程")
     parser.add_argument("--start-watchdog", action="store_true", help="后台异步守护启动 UDP 监测进程")
@@ -1568,25 +1666,8 @@ def main():
         sys.exit(0)
 
     if args.check_update:
-        info = check_github_update()
+        info = check_github_update(force=args.force)
         print(json.dumps(info, ensure_ascii=False))
-        sys.exit(0)
-
-    if args.get_update_status:
-        if os.path.exists(UPDATE_STATUS_FILE):
-            try:
-                with open(UPDATE_STATUS_FILE, "r", encoding="utf-8") as f:
-                    sys.stdout.write(f.read())
-                    sys.exit(0)
-            except Exception:
-                pass
-        print(json.dumps({"stage": "idle", "message": "", "success": None}, ensure_ascii=False))
-        sys.exit(0)
-
-    if args.start_update:
-        set_update_status("downloading", "正在准备下载最新安装包...")
-        daemonize(args.logfile)
-        do_github_update(args.pkg_url)
         sys.exit(0)
 
     if args.do_update:
@@ -1595,7 +1676,7 @@ def main():
         sys.exit(0)
 
     if args.status:
-        res = query_status_json(args.url, args.user, args.password, args.wan)
+        res = query_status_json(args.url, args.user, args.password, args.wan, force=args.force)
         print(res)
         sys.exit(0)
 

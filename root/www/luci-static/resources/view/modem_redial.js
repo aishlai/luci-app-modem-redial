@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.6';
+var PLUGIN_VERSION = 'v1.5.7';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -664,7 +664,8 @@ return view.extend({
 				}
 			}
 
-			fs.exec('/usr/bin/modem_redial', ['--status']).then(function(res) {
+			var statusParams = isManualClick ? ['--status', '--force'] : ['--status'];
+			fs.exec('/usr/bin/modem_redial', statusParams).then(function(res) {
 				try {
 					var raw = (res && res.stdout) ? res.stdout : res;
 					var data = JSON.parse(raw || '{}');
@@ -704,7 +705,7 @@ return view.extend({
 			});
 		};
 
-		// 检查 GitHub 最新版本 (isAuto: 每次进入插件时是否为静默自动检测)
+		// 检查 GitHub 最新版本 (完全异步非阻塞，支持内存级高速缓存)
 		window.checkPluginUpdate = function(isAuto) {
 			var btn = document.getElementById('btn_check_update');
 			var tip = document.getElementById('check_update_tip');
@@ -716,7 +717,23 @@ return view.extend({
 				}
 			}
 
-			fs.exec('/usr/bin/modem_redial', ['--check-update']).then(function(res) {
+			// 若为静默自动检测，先尝试读取本地 30 分钟缓存，0 毫秒即时响应，绝不产生网络阻塞
+			var checkPromise;
+			if (isAuto) {
+				checkPromise = L.resolveDefault(fs.read('/tmp/log/modem_redial_update_cache.json'), '').then(function(raw) {
+					try {
+						var cached = JSON.parse((raw || '').trim());
+						if (cached && cached.success) {
+							return { stdout: raw };
+						}
+					} catch(e) {}
+					return fs.exec('/usr/bin/modem_redial', ['--check-update']);
+				});
+			} else {
+				checkPromise = fs.exec('/usr/bin/modem_redial', ['--check-update', '--force']);
+			}
+
+			checkPromise.then(function(res) {
 				if (!isAuto && btn) {
 					btn.disabled = false;
 					btn.innerText = '🚀 ' + _('检查更新');
@@ -1130,10 +1147,10 @@ return view.extend({
 			}
 		} catch(e) {}
 
-		// 每次进入插件，自动检查更新：若有新版本则自动弹出更新悬浮层，无新版本则静默无提示
+		// 每次进入插件，延时 3.5 秒后在后台完全异步静默检测更新，绝不阻塞首次页面渲染与交互
 		setTimeout(function() {
 			window.checkPluginUpdate(true);
-		}, 1000);
+		}, 3500);
 
 		// 保底启动 UDP 连通性监测守护进程 (若已启用但未在运行，秒级拉起)
 		fs.exec('/usr/bin/modem_redial', ['--start-watchdog']);
