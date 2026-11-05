@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.4';
+var PLUGIN_VERSION = 'v1.5.5';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -904,136 +904,63 @@ return view.extend({
 			});
 		};
 
-		// 执行一键升级 (完全异步后台守护化，彻底根除 XHR 30s 超时)
+		// 执行一键升级 (采用 v1.5.0 经典直连高速升级机制，2~3 秒极速完成)
 		window.doPluginUpdate = function(downloadUrl, newVersion) {
-			if (window._isUpgrading) return;
-			window._isUpgrading = true;
-
 			ui.showModal(_('正在升级插件'), [
 				E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
-					E('div', { 'id': 'upgrade_modal_icon', 'style': 'font-size:36px;margin-bottom:12px;' }, '⏳'),
-					E('p', { 'id': 'upgrade_modal_title', 'style': 'font-size:16px;font-weight:600;' }, [
+					E('div', { 'style': 'font-size:36px;margin-bottom:12px;' }, '⏳'),
+					E('p', { 'style': 'font-size:16px;font-weight:600;' }, [
 						_('正在下载并安装最新版本 ') + (newVersion || '') + ' ...'
 					]),
-					E('p', { 'id': 'upgrade_modal_desc', 'style': 'font-size:13px;color:#666;margin-top:8px;' }, _('正在准备下载安装包并执行覆盖安装，请稍候...')),
-					E('div', { 'style': 'margin-top:16px;background:#e9ecef;border-radius:4px;overflow:hidden;height:8px;' }, [
-						E('div', { 'id': 'upgrade_progress_bar', 'style': 'width:20%;background:#0d6efd;height:100%;transition:width 0.4s ease;' })
-					])
+					E('p', { 'style': 'font-size:12px;color:#888;margin-top:6px;' }, _('正在下载最新 IPK 安装包并执行覆盖安装，整个过程约需 2~3 秒，请稍候...'))
 				])
 			]);
 
-			var params = ['--start-update'];
+			var params = ['--do-update'];
 			if (downloadUrl) {
 				params.push('--pkg-url');
 				params.push(downloadUrl);
 			}
 
-			var pollCount = 0;
-			var maxPolls = 60; // 最多轮询 60 秒
-			var isDone = false;
+			fs.exec('/usr/bin/modem_redial', params).then(function(res) {
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var ret = {};
+				try {
+					ret = JSON.parse(raw || '{}');
+				} catch(e) {
+					ret = { success: false, error: raw };
+				}
 
-			// 1. 立即启动前端进度轮询 (使用轻量高效的 fs.read 读取内存临时状态，绝不依赖阻塞的 exec)
-			var updateTimer = setInterval(function() {
-				pollCount++;
-
-				L.resolveDefault(fs.read('/tmp/log/modem_redial_update.status'), '').then(function(raw) {
-					var status = {};
-					try {
-						status = JSON.parse((raw || '').trim());
-					} catch(e) {}
-
-					var titleElem = document.getElementById('upgrade_modal_title');
-					var descElem = document.getElementById('upgrade_modal_desc');
-					var barElem = document.getElementById('upgrade_progress_bar');
-					var iconElem = document.getElementById('upgrade_modal_icon');
-
-					if (descElem && status.message) {
-						descElem.innerText = status.message;
-					}
-
-					if (status.stage === 'downloading') {
-						if (barElem) barElem.style.width = '45%';
-					} else if (status.stage === 'installing') {
-						if (barElem) barElem.style.width = '80%';
-					}
-
-					if (status.success === true) {
-						if (isDone) return;
-						isDone = true;
-						clearInterval(updateTimer);
-						window._isUpgrading = false;
-						if (barElem) {
-							barElem.style.width = '100%';
-							barElem.style.background = '#28a745';
-						}
-						if (iconElem) iconElem.innerText = '🎉';
-						if (titleElem) {
-							titleElem.style.color = '#28a745';
-							titleElem.innerText = _('插件已成功升级至最新版本！');
-						}
-						if (descElem) {
-							descElem.innerText = _('系统已恢复您的全部配置，页面将在 2.5 秒后自动刷新...');
-						}
-						setTimeout(function() {
-							location.reload();
-						}, 2500);
-						return;
-					}
-
-					if (status.success === false || status.stage === 'error') {
-						if (isDone) return;
-						isDone = true;
-						clearInterval(updateTimer);
-						window._isUpgrading = false;
-						ui.showModal(_('升级失败'), [
-							E('div', { 'style': 'padding:15px 5px;' }, [
-								E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (status.error || _('升级过程中发生错误'))),
-								E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
-									E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
-								])
-							])
-						]);
-						return;
-					}
-
-					if (pollCount >= maxPolls) {
-						if (isDone) return;
-						isDone = true;
-						clearInterval(updateTimer);
-						window._isUpgrading = false;
+				if (ret.success) {
+					ui.showModal(_('升级成功'), [
+						E('div', { 'style': 'text-align:center;padding:25px 15px;' }, [
+							E('div', { 'style': 'font-size:36px;margin-bottom:12px;' }, '🎉'),
+							E('p', { 'style': 'font-size:16px;font-weight:600;color:#28a745;' }, _('插件已成功升级至最新版本！')),
+							E('p', { 'style': 'font-size:13px;color:#666;margin-top:8px;' }, _('系统已恢复您的全部配置，页面将在 2.5 秒后自动刷新...'))
+						])
+					]);
+					setTimeout(function() {
 						location.reload();
-					}
-				});
-			}, 1000);
-
-			// 2. 异步触发后台升级执行 (若遇到网络代理偶发超时或会话断开，结合状态文件放行，彻底消除假报错)
-			fs.exec('/usr/bin/modem_redial', params).then(function() {
-				// 后台启动命令正常返回，继续交由轮询处理
-			}).catch(function(err) {
-				if (isDone) return;
-				// 兜底校验当前任务是否其实已经在进行或已成功
-				L.resolveDefault(fs.read('/tmp/log/modem_redial_update.status'), '').then(function(raw) {
-					try {
-						var st = JSON.parse((raw || '').trim());
-						if (st.stage === 'downloading' || st.stage === 'installing' || st.success === true) {
-							// 后台正在平稳推进或已成功，忽略此 XHR 超时假报警
-							return;
-						}
-					} catch(e) {}
-
-					if (isDone) return;
-					isDone = true;
-					clearInterval(updateTimer);
-					window._isUpgrading = false;
-					ui.showModal(_('升级发生异常'), [
+					}, 2500);
+				} else {
+					ui.showModal(_('升级失败'), [
 						E('div', { 'style': 'padding:15px 5px;' }, [
-							E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
+							E('p', { 'style': 'color:#dc3545;font-weight:600;font-size:14px;' }, '❌ ' + (ret.error || _('升级过程中发生错误'))),
 							E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
 								E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
 							])
 						])
 					]);
-				});
+				}
+			}).catch(function(err) {
+				ui.showModal(_('升级发生异常'), [
+					E('div', { 'style': 'padding:15px 5px;' }, [
+						E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '❌ ' + (err.message || err)),
+						E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+							E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+						])
+					])
+				]);
 			});
 		};
 

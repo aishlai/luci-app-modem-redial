@@ -35,18 +35,6 @@ if [ "$1" = "--start" ]; then
     exit 0
 fi
 
-if [ "$1" = "--start-update" ]; then
-    shift
-    mkdir -p /tmp/log /tmp/run
-    echo '{"stage":"downloading","message":"正在准备下载最新安装包...","success":null}' > /tmp/log/modem_redial_update.status
-    if command -v start-stop-daemon >/dev/null 2>&1; then
-        start-stop-daemon -S -b -q -x python3 -- "$PY_SCRIPT" --do-update "$@"
-    else
-        nohup python3 "$PY_SCRIPT" --do-update "$@" </dev/null >/dev/null 2>&1 &
-    fi
-    echo "STARTED"
-    exit 0
-fi
 
 if [ "$1" = "--start-watchdog" ]; then
     WATCHDOG_PID="/tmp/run/modem_redial_watchdog.pid"
