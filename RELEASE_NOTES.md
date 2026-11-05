@@ -1,52 +1,34 @@
-# Release v1.4.8 / 版本发布说明
+# Release v1.4.9 / 版本发布说明
 
 ## 🇨🇳 中文更新日志 (Changelog in Chinese)
 
-### 🛡️ 核心功能增强：实时 UDP 连通性监测日志 (内存零损耗)
+### 🐛 重点修复与后台守护自愈机制
 
-1. **新增「实时连通性监测日志」面板**
-   - 在「监测重拨」标签页中新增暗色终端风格的实时连通性日志看板；
-   - 完整展示当前网络下所有 UDP 检测目标（包括 DNS `53`、STUN `3478`、NTP `123` 等）的实时往返延迟 (RTT)、协议类型与通讯状态；
-   - 实时呈现当前失败计数、触发阈值及当前网络是否遭遇运营商 UDP QoS 阻断的综合诊断信息。
+1. **彻底解决 UDP 连通性监测未自动按设定周期运行的问题**
+   - **自愈待机架构**：监测守护进程优化为低功耗待机轮询模式。当插件或监测暂时未开启时自动待机，用户在网页端开启或修改检测周期（例如设置为 `15 秒`）并保存后，守护进程无需重启即可在 5 秒内自动唤醒，严格遵循用户设定的周期间隔周期性探测；
+   - **双向联动与 ucitrack 注册**：在系统级注册 `ucitrack` 联动与 `init.d reload_service`，确保网页端点击「保存并应用」时无缝触发服务重载；
+   - **页面访问智能自启**：进入插件管理页面时自动检测并保底唤醒监测守护进程，彻底杜绝后台进程脱管沉睡。
 
-2. **每轮检测覆盖刷新，不占用路由器闪存寿命**
-   - 实时监测日志严格存储在内存系统临时目录 (`/tmp/log/modem_redial_live_qos.log`) 中；
-   - 无论后台守护进程周期轮询，还是手动触发探测，每次均以覆盖模式 (`w`) 仅保留最新单轮探测结果；
-   - 彻底避免频繁写盘对路由器内置 Flash 闪存造成磨损，重启后自动清理。
-
-3. **快捷交互与无感自动轮询**
-   - 提供「🔄 刷新实时日志」按钮，随时读取后台最新监测报告；
-   - 新增「⚡ 立即探测一轮」按钮，一键向所有节点发送实时探测包并即刻刷新日志看板；
-   - 页面开启时后台每 5 秒静默同步一次最新数据，当用户选中或交互时智能防打扰。
-
-4. **历史记录与实时探测职责清晰分离**
-   - **实时监测日志** (`/tmp/log/modem_redial_live_qos.log`)：纯内存非持久化，仅保留单轮最新指标；
-   - **QoS 触发重拨历史日志** (`/etc/modem_redial_qos.log`)：持久化存储在 Flash 中，仅在网络全断流并实际触发光猫重拨时记录归档。
+2. **彻底解决点击「⚡ 立即探测一轮」后日志回显卡死的问题**
+   - **解除主开关限制**：单轮连通性测试解除主开关拦截，无论当前插件是否开启，点击即可随时对各目标发起即时网络体检；
+   - **JSON 直通管道回显**：探测结束后，后端直接将格式化终端看板文本通过 JSON 管道回传前端，不再依赖脆弱的直接文件读取；
+   - **命令行回读兜底**：前端日志更新全面升级为 `/usr/bin/modem_redial --show-live-qos-log` 权限直通调用，彻底解决因 rpcd 权限缓存导致日志框停留在 `>>> 正在向所有目标节点发送 UDP 探测包...` 的卡死假象。
 
 ---
 
 ## 🇺🇸 English Changelog
 
-### 🛡️ Core Feature: Real-Time UDP QoS Telemetry Log (RAM-only, Zero Flash Wear)
+### 🐛 Critical Bug Fixes & Watchdog Self-Healing
 
-1. **New Real-Time Live Monitoring Log Panel**
-   - Added a dark terminal-style live telemetry log box inside the "监测重拨" (Monitoring Redial) tab.
-   - Accurately reports bidirectional round-trip latency (RTT), protocol tags (DNS 53, STUN 3478, NTP 123), and connection health for every target node.
-   - Provides instant diagnostic insight into failure counters, trigger thresholds, and ISP UDP QoS throttling.
+1. **Resolved Watchdog Failing to Automatically Run at Configured Interval**
+   - **Self-Healing Standby Architecture**: Refactored the watchdog daemon to run continuously in an ultra-low-power idle loop when disabled. As soon as the feature is enabled or the interval is updated (e.g., set to `15s`), the watchdog automatically activates within 5 seconds and strictly adheres to the custom period.
+   - **ucitrack & init.d Service Integration**: Registered system `ucitrack` triggers and `reload_service` so clicking "Save & Apply" in LuCI reliably reloads configuration in real time.
+   - **Fail-Safe View Activation**: Visiting the WebUI automatically verifies and wakes up the background monitoring daemon if needed.
 
-2. **Per-Round Overwrite Refresh, Zero Flash Wear**
-   - Strictly resides in volatile memory (`/tmp/log/modem_redial_live_qos.log` on `tmpfs`).
-   - Every background probe cycle and manual check overwrites the previous round (`mode="w"`), retaining only the latest single-round telemetry.
-   - Eliminates flash disk writes, ensuring complete zero flash degradation.
-
-3. **Instant Controls & Silent Auto-Sync**
-   - "🔄 Refresh Live Log" button for instant file reload.
-   - "⚡ Probe Round Now" button to execute an immediate probe round across all endpoints and update telemetry on the fly.
-   - Silent 5-second polling keeps the live log updated in the background without interrupting text selection or focus.
-
-4. **Clean Separation Between Live Telemetry & Historical Events**
-   - **Live Telemetry** (`/tmp/log/modem_redial_live_qos.log`): RAM-only, non-persistent, single-round live metrics.
-   - **QoS Trigger History** (`/etc/modem_redial_qos.log`): Persistent on flash, strictly logs actual redial interventions and IP acquisition results.
+2. **Fixed "⚡ Probe Round Now" Getting Stuck on Progress Text**
+   - **Unrestricted Instant Probing**: Manual probe rounds can now be executed anytime without being blocked by the global enable toggle.
+   - **Direct JSON Pipe Delivery**: Single-round telemetry reports are directly delivered to the frontend in the JSON response payload, eliminating reliance on raw file read calls.
+   - **Robust Command Fallback**: Upgraded polling and log refresh to use `/usr/bin/modem_redial --show-live-qos-log` to bypass rpcd ACL caching issues, ensuring instantaneous display of live probe metrics.
 
 ---
 
@@ -58,5 +40,5 @@
 **OpenWrt 命令行安装 / Upgrade via SSH**:
 ```bash
 opkg update && opkg install python3
-opkg install --force-reinstall luci-app-modem-redial_1.4.8-1_all.ipk
+opkg install --force-reinstall luci-app-modem-redial_1.4.9-1_all.ipk
 ```

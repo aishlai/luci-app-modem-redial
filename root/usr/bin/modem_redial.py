@@ -33,9 +33,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.4.8-1"
+__version__ = "1.4.9-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
+WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
 
 
 def write_pid(pid: int = None):
@@ -82,6 +83,53 @@ def is_redial_running() -> bool:
                 return True
         except (ProcessLookupError, OSError):
             remove_pid()
+            return False
+        except Exception:
+            return False
+    return False
+
+
+def write_watchdog_pid(pid: int = None):
+    try:
+        os.makedirs(os.path.dirname(WATCHDOG_PID_FILE), exist_ok=True)
+        with open(WATCHDOG_PID_FILE, "w", encoding="utf-8") as f:
+            f.write(str(pid or os.getpid()))
+    except Exception:
+        pass
+
+
+def remove_watchdog_pid():
+    try:
+        if os.path.exists(WATCHDOG_PID_FILE):
+            os.remove(WATCHDOG_PID_FILE)
+    except Exception:
+        pass
+
+
+def is_watchdog_running() -> bool:
+    """检查是否已有 UDP 连通性监测守护进程在运行"""
+    if os.path.exists(WATCHDOG_PID_FILE):
+        try:
+            with open(WATCHDOG_PID_FILE, "r", encoding="utf-8") as f:
+                pid_str = f.read().strip()
+            if pid_str:
+                pid = int(pid_str)
+                if pid == os.getpid():
+                    return True
+                os.kill(pid, 0)
+                proc_cmd = f"/proc/{pid}/cmdline"
+                if os.path.exists(proc_cmd):
+                    try:
+                        with open(proc_cmd, "rb") as pf:
+                            cmd_bytes = pf.read()
+                        if b"watchdog" not in cmd_bytes:
+                            remove_watchdog_pid()
+                            return False
+                    except Exception:
+                        pass
+                return True
+        except (ProcessLookupError, OSError):
+            remove_watchdog_pid()
             return False
         except Exception:
             return False
@@ -1186,11 +1234,7 @@ def check_all_udp_targets(targets: list, quick_exit: bool = False, timeout: floa
     }
 
 
-def write_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: int = 2, interval: int = 60, status_note: str = ""):
-    """
-    输出最新一轮 UDP QoS 连通性监测结果至非持久化内存日志 (/tmp/log/modem_redial_live_qos.log)
-    每轮探测覆盖刷新，不写闪存
-    """
+def format_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: int = 2, interval: int = 60, status_note: str = "") -> str:
     now_str = time.strftime("%Y-%m-%d %H:%M:%S")
     results = res.get("results", []) if isinstance(res, dict) else []
     all_failed = res.get("all_failed", True) if isinstance(res, dict) else True
@@ -1227,8 +1271,15 @@ def write_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: in
 
     lines.append("=" * 76)
     lines.append("💡 提示: 本日志仅展示当前最新一轮探测结果，存储于系统内存 (/tmp)，不消耗路由器闪存。")
-    content = "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n"
 
+
+def write_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: int = 2, interval: int = 60, status_note: str = "") -> str:
+    """
+    输出最新一轮 UDP QoS 连通性监测结果至非持久化内存日志 (/tmp/log/modem_redial_live_qos.log)
+    每轮探测覆盖刷新，不写闪存，并返回格式化文本
+    """
+    content = format_live_qos_log(res, consecutive_fails, fail_threshold, interval, status_note)
     try:
         os.makedirs(os.path.dirname(DEFAULT_LIVE_QOS_LOG), exist_ok=True)
         with open(DEFAULT_LIVE_QOS_LOG, "w", encoding="utf-8") as f:
@@ -1236,6 +1287,7 @@ def write_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: in
             f.flush()
     except Exception as e:
         sys.stderr.write(f"写入实时 QoS 日志失败: {e}\n")
+    return content
 
 
 def log_qos_event(msg: str, qos_log_file: str = DEFAULT_QOS_LOG):
@@ -1280,102 +1332,109 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
     后台守护进程：按指定间隔周期性探测 UDP 连通性，全不通时触发重拨换 IP
     并在专属持久化日志中记录触发详情
     """
+    if is_watchdog_running():
+        return
+    write_watchdog_pid()
     log("[*] [UDP Watchdog] 启动 UDP QoS 连通性监测守护进程...", log_file)
     consecutive_fails = 0
 
-    while True:
-        try:
-            # 重新加载最新的 UCI 配置 (允许用户在后台保存后立即动态生效)
-            conf = load_uci_config()
-            if conf.get("enabled", "0") != "1" or conf.get("udp_watchdog_enabled", "0") != "1":
-                log("[*] [UDP Watchdog] 监测功能已关闭，守护进程退出。", log_file)
-                break
+    try:
+        while True:
+            try:
+                # 重新加载最新的 UCI 配置 (允许用户在后台保存后立即动态生效)
+                conf = load_uci_config()
+                # 若插件或监测被关闭，进入低功耗待机轮询，不退出进程，一旦重新开启立即恢复监测
+                if conf.get("enabled", "0") != "1" or conf.get("udp_watchdog_enabled", "0") != "1":
+                    time.sleep(5)
+                    continue
 
-            interval = int(conf.get("udp_check_interval", "60") or "60")
-            fail_threshold = int(conf.get("udp_fail_threshold", "2") or "2")
-            cooldown = int(conf.get("udp_cooldown", "180") or "180")
-            targets = conf.get("udp_targets") or DEFAULT_UDP_TARGETS
-            if isinstance(targets, str):
-                targets = [t.strip() for t in targets.split() if t.strip()]
+                interval = int(conf.get("udp_check_interval", "60") or "60")
+                fail_threshold = int(conf.get("udp_fail_threshold", "2") or "2")
+                cooldown = int(conf.get("udp_cooldown", "180") or "180")
+                targets = conf.get("udp_targets") or DEFAULT_UDP_TARGETS
+                if isinstance(targets, str):
+                    targets = [t.strip() for t in targets.split() if t.strip()]
 
-            # 执行 UDP 检测 (完整探测全部目标，输出完整实时指标)
-            res = check_all_udp_targets(targets, quick_exit=False, timeout=1.5)
-            if res["all_failed"]:
-                consecutive_fails += 1
-                write_live_qos_log(res, consecutive_fails, fail_threshold, interval, status_note="疑似被运营商阻断")
-                log(f"[!] [UDP Watchdog] UDP 探测全部失败 ({consecutive_fails}/{fail_threshold})！疑似遭遇运营商 UDP QoS 阻断。", log_file)
-                if consecutive_fails >= fail_threshold:
-                    log("[!] [UDP Watchdog] 连续失败次数达到阈值，判定当前网络已被 QoS，立即触发光猫自动重拨换 IP！", log_file)
-                    consecutive_fails = 0
+                # 执行 UDP 检测 (完整探测全部目标，输出完整实时指标)
+                res = check_all_udp_targets(targets, quick_exit=False, timeout=1.5)
+                if res["all_failed"]:
+                    consecutive_fails += 1
+                    write_live_qos_log(res, consecutive_fails, fail_threshold, interval, status_note="疑似被运营商阻断")
+                    log(f"[!] [UDP Watchdog] UDP 探测全部失败 ({consecutive_fails}/{fail_threshold})！疑似遭遇运营商 UDP QoS 阻断。", log_file)
+                    if consecutive_fails >= fail_threshold:
+                        log("[!] [UDP Watchdog] 连续失败次数达到阈值，判定当前网络已被 QoS，立即触发光猫自动重拨换 IP！", log_file)
+                        consecutive_fails = 0
 
-                    if is_redial_running():
-                        log("[!] [UDP Watchdog] 已有重拨任务在运行，跳过本次触发。", log_file)
-                    else:
-                        qos_log_path = conf.get("udp_log_file") or DEFAULT_QOS_LOG
-                        targets_desc = ", ".join(targets)
-
-                        # 记录进入独立持久化日志
-                        log_qos_event(
-                            f"[!] 检测到连续 {fail_threshold} 次所有 UDP 目标均不可达，判定遭遇运营商 UDP QoS 限制/阻断！\n"
-                            f"                      探测目标列表: {targets_desc}\n"
-                            f"                      正在执行光猫重新拨号以更换新 IP...",
-                            qos_log_file=qos_log_path
-                        )
-                        write_live_qos_log(res, fail_threshold, fail_threshold, interval, status_note="达到阈值，正在触发光猫重拨换 IP...")
-
-                        t_start = time.time()
-                        redial_success = redial_wan(
-                            router_ip=conf.get("router_url"),
-                            username=conf.get("username"),
-                            password=conf.get("password"),
-                            target_wan_name=conf.get("wan_name", "2_INTERNET_R_VID_3961"),
-                            pause_seconds=int(conf.get("pause_seconds", "3") or "3"),
-                            log_file=log_file,
-                            trigger_source="qos",
-                            extra_info=f"连续 {fail_threshold} 次探测所有 UDP 目标均不可达 ({targets_desc})"
-                        )
-                        elapsed = int(time.time() - t_start)
-
-                        if redial_success:
-                            log(f"[+] [UDP Watchdog] 重拨换 IP 成功！进入冷却时间 {cooldown} 秒...", log_file)
-                            new_ip_desc = ""
-                            try:
-                                client = HuaweiONTClient(conf.get("router_url"), conf.get("username"), conf.get("password"))
-                                wan_info = client.get_wan_status()
-                                for w in wan_info.get("wan_list", []):
-                                    if w.get("name") == conf.get("wan_name", "2_INTERNET_R_VID_3961") and w.get("ip"):
-                                        new_ip_desc = f"，已成功获取新 IP: {w.get('ip')}"
-                                        break
-                            except Exception:
-                                pass
-
-                            log_qos_event(
-                                f"[+] 光猫自动重拨完成 (耗时 {elapsed} 秒){new_ip_desc}，进入冷却缓冲期 {cooldown} 秒。\n"
-                                f"--------------------------------------------------------------------------------",
-                                qos_log_file=qos_log_path
-                            )
-                            write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"重拨换 IP 完成{new_ip_desc}，冷却缓冲中 ({cooldown}s)")
+                        if is_redial_running():
+                            log("[!] [UDP Watchdog] 已有重拨任务在运行，跳过本次触发。", log_file)
                         else:
-                            log(f"[-] [UDP Watchdog] 重拨换 IP 失败，将在 {cooldown} 秒后重试监测...", log_file)
+                            qos_log_path = conf.get("udp_log_file") or DEFAULT_QOS_LOG
+                            targets_desc = ", ".join(targets)
+
+                            # 记录进入独立持久化日志
                             log_qos_event(
-                                f"[-] 光猫自动重拨换 IP 失败 (耗时 {elapsed} 秒)，请检查光猫登录密码或连接，将在 {cooldown} 秒后重试。\n"
-                                f"--------------------------------------------------------------------------------",
+                                f"[!] 检测到连续 {fail_threshold} 次所有 UDP 目标均不可达，判定遭遇运营商 UDP QoS 限制/阻断！\n"
+                                f"                      探测目标列表: {targets_desc}\n"
+                                f"                      正在执行光猫重新拨号以更换新 IP...",
                                 qos_log_file=qos_log_path
                             )
-                            write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"重拨换 IP 失败，将在 {cooldown} 秒后重试")
+                            write_live_qos_log(res, fail_threshold, fail_threshold, interval, status_note="达到阈值，正在触发光猫重拨换 IP...")
 
-                        time.sleep(max(10, cooldown))
-                        continue
-            else:
-                if consecutive_fails > 0:
-                    log(f"[+] [UDP Watchdog] UDP 连通性已恢复正常 (探测通过: {res.get('working_target', '')})。", log_file)
-                consecutive_fails = 0
-                write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"首通节点: {res.get('working_target', '')}")
+                            t_start = time.time()
+                            redial_success = redial_wan(
+                                router_ip=conf.get("router_url"),
+                                username=conf.get("username"),
+                                password=conf.get("password"),
+                                target_wan_name=conf.get("wan_name", "2_INTERNET_R_VID_3961"),
+                                pause_seconds=int(conf.get("pause_seconds", "3") or "3"),
+                                log_file=log_file,
+                                trigger_source="qos",
+                                extra_info=f"连续 {fail_threshold} 次探测所有 UDP 目标均不可达 ({targets_desc})"
+                            )
+                            elapsed = int(time.time() - t_start)
 
-            time.sleep(max(5, interval))
-        except Exception as e:
-            log(f"[!] [UDP Watchdog] 监测运行异常: {e}", log_file)
-            time.sleep(30)
+                            if redial_success:
+                                log(f"[+] [UDP Watchdog] 重拨换 IP 成功！进入冷却时间 {cooldown} 秒...", log_file)
+                                new_ip_desc = ""
+                                try:
+                                    client = HuaweiONTClient(conf.get("router_url"), conf.get("username"), conf.get("password"))
+                                    wan_info = client.get_wan_status()
+                                    for w in wan_info.get("wan_list", []):
+                                        if w.get("name") == conf.get("wan_name", "2_INTERNET_R_VID_3961") and w.get("ip"):
+                                            new_ip_desc = f"，已成功获取新 IP: {w.get('ip')}"
+                                            break
+                                except Exception:
+                                    pass
+
+                                log_qos_event(
+                                    f"[+] 光猫自动重拨完成 (耗时 {elapsed} 秒){new_ip_desc}，进入冷却缓冲期 {cooldown} 秒。\n"
+                                    f"--------------------------------------------------------------------------------",
+                                    qos_log_file=qos_log_path
+                                )
+                                write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"重拨换 IP 完成{new_ip_desc}，冷却缓冲中 ({cooldown}s)")
+                            else:
+                                log(f"[-] [UDP Watchdog] 重拨换 IP 失败，将在 {cooldown} 秒后重试监测...", log_file)
+                                log_qos_event(
+                                    f"[-] 光猫自动重拨换 IP 失败 (耗时 {elapsed} 秒)，请检查光猫登录密码或连接，将在 {cooldown} 秒后重试。\n"
+                                    f"--------------------------------------------------------------------------------",
+                                    qos_log_file=qos_log_path
+                                )
+                                write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"重拨换 IP 失败，将在 {cooldown} 秒后重试")
+
+                            time.sleep(max(10, cooldown))
+                            continue
+                else:
+                    if consecutive_fails > 0:
+                        log(f"[+] [UDP Watchdog] UDP 连通性已恢复正常 (探测通过: {res.get('working_target', '')})。", log_file)
+                    consecutive_fails = 0
+                    write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"首通节点: {res.get('working_target', '')}")
+
+                time.sleep(max(5, interval))
+            except Exception as e:
+                log(f"[!] [UDP Watchdog] 监测运行异常: {e}", log_file)
+                time.sleep(30)
+    finally:
+        remove_watchdog_pid()
 
 
 def main():
@@ -1396,6 +1455,8 @@ def main():
     parser.add_argument("--do-update", action="store_true", help="一键下载并升级到最新版本")
     parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
     parser.add_argument("--watchdog", action="store_true", help="运行 UDP 连通性监测后台守护进程")
+    parser.add_argument("--start-watchdog", action="store_true", help="后台异步守护启动 UDP 监测进程")
+    parser.add_argument("--stop-watchdog", action="store_true", help="停止 UDP 监测守护进程")
     parser.add_argument("--test-udp", action="store_true", help="测试当前网络环境下各目标 UDP 连通性并输出 JSON")
     parser.add_argument("--clear-qos-log", action="store_true", help="清空 UDP QoS 独立持久化日志")
     parser.add_argument("--show-qos-log", action="store_true", help="输出 UDP QoS 独立持久化日志内容")
@@ -1462,10 +1523,27 @@ def main():
             print("暂无实时检测日志，请等待监测后台运行或点击「⚡ 立即探测一轮」。")
         sys.exit(0)
 
-    if args.test_udp:
-        if str(uci_conf.get("enabled", "0")) != "1":
-            print(json.dumps({"all_failed": True, "error": "插件当前处于关闭状态，请先开启「启用插件」并保存应用", "results": []}, ensure_ascii=False))
+    if args.stop_watchdog:
+        if os.path.exists(WATCHDOG_PID_FILE):
+            try:
+                with open(WATCHDOG_PID_FILE, "r", encoding="utf-8") as f:
+                    p = int(f.read().strip())
+                os.kill(p, 15)
+            except Exception:
+                pass
+            remove_watchdog_pid()
+        print("STOPPED")
+        sys.exit(0)
+
+    if args.start_watchdog:
+        if is_watchdog_running():
+            print("ALREADY_RUNNING")
             sys.exit(0)
+        daemonize(args.logfile)
+        run_udp_watchdog(args.logfile)
+        sys.exit(0)
+
+    if args.test_udp:
         targets = uci_conf.get("udp_targets") or DEFAULT_UDP_TARGETS
         if isinstance(targets, str):
             targets = [t.strip() for t in targets.split() if t.strip()]
@@ -1473,9 +1551,13 @@ def main():
         try:
             interval = int(uci_conf.get("udp_check_interval", "60") or "60")
             fail_threshold = int(uci_conf.get("udp_fail_threshold", "2") or "2")
-            write_live_qos_log(res, 0 if res.get("any_ok") else 1, fail_threshold, interval, status_note="手动单轮探测")
-        except Exception:
-            pass
+            status_note = "手动单轮探测"
+            if str(uci_conf.get("enabled", "0")) != "1":
+                status_note += " (提示: 插件主开关当前未开启)"
+            log_text = write_live_qos_log(res, 0 if res.get("any_ok") else 1, fail_threshold, interval, status_note=status_note)
+            res["log_text"] = log_text
+        except Exception as e:
+            res["log_text"] = f"写入实时日志异常: {e}"
         print(json.dumps(res, ensure_ascii=False))
         sys.exit(0)
 

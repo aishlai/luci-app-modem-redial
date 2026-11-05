@@ -4,9 +4,15 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.8';
+var PLUGIN_VERSION = 'v1.4.9';
 
 return view.extend({
+	handleSaveApply: function(ev, mode) {
+		return this.super('handleSaveApply', [ev, mode]).then(function() {
+			return fs.exec('/etc/init.d/modem_redial', ['restart']);
+		});
+	},
+
 	load: function() {
 		return Promise.all([
 			L.resolveDefault(fs.read('/tmp/log/modem_redial.log'), ''),
@@ -967,9 +973,10 @@ return view.extend({
 				btn.disabled = true;
 				btn.innerText = '⏳ ' + _('读取中...');
 			}
-			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
-				if (liveBox) {
-					liveBox.value = txt || _('暂无实时监测数据。');
+			fs.exec('/usr/bin/modem_redial', ['--show-live-qos-log']).then(function(res) {
+				var txt = (res && res.stdout) ? res.stdout.trim() : '';
+				if (liveBox && txt) {
+					liveBox.value = txt;
 				}
 				if (btn) {
 					btn.innerText = '✅ ' + _('已刷新');
@@ -1011,11 +1018,29 @@ return view.extend({
 						btn.innerText = '⚡ ' + _('立即探测一轮');
 					}, 1200);
 				}
-				L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
-					if (liveBox && txt) {
-						liveBox.value = txt;
+				var raw = (res && res.stdout) ? res.stdout.trim() : '';
+				var data = {};
+				try {
+					data = JSON.parse(raw || '{}');
+				} catch(e) {}
+
+				if (liveBox) {
+					if (data.log_text) {
+						liveBox.value = data.log_text;
+					} else {
+						// 备用方式：通过 --show-live-qos-log 命令直接读取
+						fs.exec('/usr/bin/modem_redial', ['--show-live-qos-log']).then(function(sRes) {
+							var sTxt = (sRes && sRes.stdout) ? sRes.stdout.trim() : '';
+							if (sTxt) {
+								liveBox.value = sTxt;
+							} else if (raw) {
+								liveBox.value = raw;
+							}
+						}).catch(function() {
+							if (raw) liveBox.value = raw;
+						});
 					}
-				});
+				}
 			}).catch(function(err) {
 				window._isProbingUdp = false;
 				if (btn) {
@@ -1111,17 +1136,21 @@ return view.extend({
 			window.checkPluginUpdate(true);
 		}, 1000);
 
-		// 周期性轮询刷新 UDP 实时监测日志 (每 5 秒在后台静默读取一次最新日志文件)
+		// 保底启动 UDP 连通性监测守护进程 (若已启用但未在运行，秒级拉起)
+		fs.exec('/usr/bin/modem_redial', ['--start-watchdog']);
+
+		// 周期性轮询刷新 UDP 实时监测日志 (后台静默读取最新单轮日志，避开聚焦选中文本状态)
 		setInterval(function() {
 			var liveBox = document.getElementById('modem_redial_live_qos_log');
 			if (!liveBox || liveBox.offsetParent === null) return;
 			if (liveBox.matches && liveBox.matches(':focus')) return;
-			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '').then(function(txt) {
+			fs.exec('/usr/bin/modem_redial', ['--show-live-qos-log']).then(function(res) {
+				var txt = (res && res.stdout) ? res.stdout.trim() : '';
 				if (liveBox && txt && liveBox.value !== txt) {
 					liveBox.value = txt;
 				}
 			});
-		}, 5000);
+		}, 3000);
 
 		return m.render();
 	}

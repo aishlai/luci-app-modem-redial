@@ -1,3 +1,14 @@
 #!/bin/sh
+# 注册 ucitrack 使得 LuCI 点击保存并应用时自动重载服务
+uci -q get ucitrack.@modem_redial[0] >/dev/null 2>&1 || {
+	uci add ucitrack modem_redial
+	uci set ucitrack.@modem_redial[-1].init="modem_redial"
+	uci commit ucitrack
+}
+
+# 重载 rpcd 确保 ACL 规则立即生效
+/etc/init.d/rpcd reload 2>/dev/null || true
+
 /etc/init.d/modem_redial enable
+/etc/init.d/modem_redial restart 2>/dev/null || true
 exit 0

@@ -35,4 +35,32 @@ if [ "$1" = "--start" ]; then
     exit 0
 fi
 
+if [ "$1" = "--start-watchdog" ]; then
+    WATCHDOG_PID="/tmp/run/modem_redial_watchdog.pid"
+    if [ -f "$WATCHDOG_PID" ]; then
+        PID=$(cat "$WATCHDOG_PID" 2>/dev/null)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            echo "ALREADY_RUNNING"
+            exit 0
+        fi
+        rm -f "$WATCHDOG_PID"
+    fi
+    mkdir -p /tmp/log /tmp/run
+    python3 "$PY_SCRIPT" --watchdog </dev/null >/dev/null 2>&1 &
+    echo "STARTED"
+    exit 0
+fi
+
+if [ "$1" = "--stop-watchdog" ]; then
+    WATCHDOG_PID="/tmp/run/modem_redial_watchdog.pid"
+    if [ -f "$WATCHDOG_PID" ]; then
+        PID=$(cat "$WATCHDOG_PID" 2>/dev/null)
+        [ -n "$PID" ] && kill -15 "$PID" 2>/dev/null || true
+        rm -f "$WATCHDOG_PID"
+    fi
+    killall -q -f "modem_redial.*--watchdog" 2>/dev/null || true
+    echo "STOPPED"
+    exit 0
+fi
+
 exec python3 "$PY_SCRIPT" "$@"

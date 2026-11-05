@@ -184,6 +184,12 @@ exit 0
           /usr/lib/lua/luci/view/modem_redial/status.htm 2>/dev/null || true
     rm -f /tmp/luci-indexcache*
     rm -rf /tmp/luci-modulecache/
+    uci -q get ucitrack.@modem_redial[0] >/dev/null 2>&1 || {
+        uci add ucitrack modem_redial
+        uci set ucitrack.@modem_redial[-1].init="modem_redial"
+        uci commit ucitrack
+    }
+    /etc/init.d/rpcd reload 2>/dev/null || true
     /etc/init.d/modem_redial enable
     /etc/init.d/modem_redial restart 2>/dev/null || true
 }
