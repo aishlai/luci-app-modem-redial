@@ -6,9 +6,6 @@ uci -q get ucitrack.@modem_redial[0] >/dev/null 2>&1 || {
 	uci commit ucitrack
 }
 
-# 重载 rpcd 确保 ACL 规则立即生效
-/etc/init.d/rpcd reload 2>/dev/null || true
-
 /etc/init.d/modem_redial enable
 /etc/init.d/modem_redial restart 2>/dev/null || true
 exit 0

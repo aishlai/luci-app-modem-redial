@@ -189,7 +189,6 @@ exit 0
         uci set ucitrack.@modem_redial[-1].init="modem_redial"
         uci commit ucitrack
     }
-    /etc/init.d/rpcd reload 2>/dev/null || true
     /etc/init.d/modem_redial enable
     /etc/init.d/modem_redial restart 2>/dev/null || true
 }

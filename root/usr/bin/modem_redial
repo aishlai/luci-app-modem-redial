@@ -35,6 +35,15 @@ if [ "$1" = "--start" ]; then
     exit 0
 fi
 
+if [ "$1" = "--start-update" ]; then
+    shift
+    mkdir -p /tmp/log /tmp/run
+    echo '{"stage":"downloading","message":"正在准备下载最新安装包...","success":null}' > /tmp/log/modem_redial_update.status
+    python3 "$PY_SCRIPT" --start-update "$@" </dev/null >/dev/null 2>&1 &
+    echo "STARTED"
+    exit 0
+fi
+
 if [ "$1" = "--start-watchdog" ]; then
     WATCHDOG_PID="/tmp/run/modem_redial_watchdog.pid"
     if [ -f "$WATCHDOG_PID" ]; then

@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.0-1"
+__version__ = "1.5.1-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
@@ -1453,6 +1453,8 @@ def main():
     parser.add_argument("--cron", action="store_true", help="定时任务执行模式 (严格遵循 enabled/cron_enabled)")
     parser.add_argument("--check-update", action="store_true", help="检查 GitHub 是否有新版本")
     parser.add_argument("--do-update", action="store_true", help="一键下载并升级到最新版本")
+    parser.add_argument("--start-update", action="store_true", help="后台异步守护启动升级 (彻底根除 XHR 超时)")
+    parser.add_argument("--get-update-status", action="store_true", help="获取当前升级进度状态 JSON")
     parser.add_argument("--pkg-url", default="", help="指定升级包下载地址 (可选)")
     parser.add_argument("--watchdog", action="store_true", help="运行 UDP 连通性监测后台守护进程")
     parser.add_argument("--start-watchdog", action="store_true", help="后台异步守护启动 UDP 监测进程")
@@ -1568,6 +1570,23 @@ def main():
     if args.check_update:
         info = check_github_update()
         print(json.dumps(info, ensure_ascii=False))
+        sys.exit(0)
+
+    if args.get_update_status:
+        if os.path.exists(UPDATE_STATUS_FILE):
+            try:
+                with open(UPDATE_STATUS_FILE, "r", encoding="utf-8") as f:
+                    sys.stdout.write(f.read())
+                    sys.exit(0)
+            except Exception:
+                pass
+        print(json.dumps({"stage": "idle", "message": "", "success": None}, ensure_ascii=False))
+        sys.exit(0)
+
+    if args.start_update:
+        set_update_status("downloading", "正在准备下载最新安装包...")
+        daemonize(args.logfile)
+        do_github_update(args.pkg_url)
         sys.exit(0)
 
     if args.do_update:
