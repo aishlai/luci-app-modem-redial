@@ -28,6 +28,12 @@ if [ "$1" = "--start" ]; then
     # 清空并预热日志，确保文件存在且有初始内容
     mkdir -p /tmp/log /tmp/run
     echo "[*] 正在启动后台守护重拨换IP任务..." > /tmp/log/modem_redial.log
+    # 立即触发监测避让冷却标记，防止断网与 UDP 探测冲突
+    NOW=$(date +%s)
+    COOL=$(uci -q get modem_redial.config.udp_cooldown 2>/dev/null || echo 180)
+    [ -z "$COOL" ] && COOL=180
+    UNTIL=$((NOW + COOL))
+    echo '{"start_time":'$NOW',"until":'$UNTIL',"cooldown":'$COOL',"reason":"正在启动后台重拨换 IP 任务"}' > /tmp/run/modem_redial_cooldown.time
 
     # 彻底关闭 stdin/stdout/stderr 并转入后台，使调用者 (rpcd) 立即返回，根除前端 XHR 30s 超时
     python3 "$PY_SCRIPT" "$@" </dev/null >/dev/null 2>&1 &

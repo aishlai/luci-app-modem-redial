@@ -33,10 +33,52 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.7-1"
+__version__ = "1.5.8-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
+REDIAL_COOLDOWN_FILE = "/tmp/run/modem_redial_cooldown.time"
+
+
+def set_redial_cooldown(cooldown_seconds: int = 180, reason: str = ""):
+    """设置重拨冷却截止时间戳 (只要重拨开始立即触发，阻断 UDP 监测冲突)"""
+    try:
+        os.makedirs(os.path.dirname(REDIAL_COOLDOWN_FILE), exist_ok=True)
+        until = time.time() + max(10, cooldown_seconds)
+        data = {
+            "start_time": int(time.time()),
+            "until": until,
+            "cooldown": cooldown_seconds,
+            "reason": reason
+        }
+        with open(REDIAL_COOLDOWN_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def get_redial_cooldown_remaining() -> tuple:
+    """
+    检查当前是否处于重拨冷却保护期
+    返回: (is_cooling: bool, remaining_seconds: int, reason: str)
+    """
+    if not os.path.exists(REDIAL_COOLDOWN_FILE):
+        return (False, 0, "")
+    try:
+        with open(REDIAL_COOLDOWN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        until = float(data.get("until", 0))
+        rem = int(until - time.time())
+        if rem > 0:
+            return (True, rem, data.get("reason", ""))
+        else:
+            try:
+                os.remove(REDIAL_COOLDOWN_FILE)
+            except Exception:
+                pass
+            return (False, 0, "")
+    except Exception:
+        return (False, 0, "")
 
 
 def write_pid(pid: int = None):
@@ -785,6 +827,13 @@ def redial_wan(
     fail_reason = ""
     log("=" * 60, log_file)
     log(f"开始执行光猫重新拨号任务 (目标: {target_wan_name})", log_file)
+
+    # 只要重拨开始，立即激活冷却期，通知 UDP 监测守护进程避让，绝不在断网重拨期间探测！
+    conf = load_uci_config()
+    cooldown = int(conf.get("udp_cooldown", "180") or "180")
+    source_desc = "手动触发" if trigger_source == "manual" else ("定时任务" if trigger_source == "cron" else "QoS 阻断触发")
+    set_redial_cooldown(cooldown, reason=f"正在执行重拨换 IP ({source_desc})")
+
     client = HuaweiONTClient(base_url=router_ip, username=username, password=password)
 
     switched_to_manual = False
@@ -890,6 +939,8 @@ def redial_wan(
         except Exception:
             pass
         log("[*] 重拨换IP流程结束。", log_file)
+        # 重拨流程结束，从当前时刻起继续维持充足的冷却缓冲期，给新 IP 与网络完全稳定留足时间
+        set_redial_cooldown(cooldown, reason="重拨换 IP 已完成，冷却缓冲中")
         remove_pid()
 
         # 触发 Ntfy 消息通知（在会话完全注销、网络恢复后发出）
@@ -1364,13 +1415,31 @@ def format_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: i
         ok = r.get("ok", False)
         rtt = r.get("rtt", 0)
         msg = str(r.get("msg", ""))
-        rtt_str = f"{rtt} ms" if ok else "--"
-        status_str = "✅ 畅通" if ok else "❌ 阻断"
+        rtt_str = f"{rtt} ms" if ok and rtt != "--" else ("--" if not ok else str(rtt))
+        status_str = "⏸️ 避让" if r.get("cooldown") else ("✅ 畅通" if ok else "❌ 阻断")
         lines.append(f"{t:<24} {proto:<8} {rtt_str:<10} {status_str:<6} {msg}")
 
     lines.append("=" * 76)
     lines.append("💡 提示: 本日志仅展示当前最新一轮探测结果，存储于系统内存 (/tmp)，不消耗路由器闪存。")
     return "\n".join(lines) + "\n"
+
+
+def write_live_qos_cooldown_log(fail_threshold: int = 2, interval: int = 60, status_note: str = "") -> str:
+    """在重拨避让或冷却期间输出占位保护日志，避免展示旧的阻断报错，保持黑框内容规整友好"""
+    targets = load_uci_config().get("udp_targets") or DEFAULT_UDP_TARGETS
+    if isinstance(targets, str):
+        targets = [t.strip() for t in targets.split() if t.strip()]
+
+    dummy_results = [
+        {"target": t, "proto": "UDP", "ok": True, "cooldown": True, "rtt": "--", "msg": "重拨保护期间，主动暂停发包"}
+        for t in targets
+    ]
+    res = {
+        "all_failed": False,
+        "any_ok": True,
+        "results": dummy_results
+    }
+    return write_live_qos_log(res, 0, fail_threshold, interval, status_note=status_note)
 
 
 def write_live_qos_log(res: dict, consecutive_fails: int = 0, fail_threshold: int = 2, interval: int = 60, status_note: str = "") -> str:
@@ -1454,6 +1523,22 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                 if isinstance(targets, str):
                     targets = [t.strip() for t in targets.split() if t.strip()]
 
+                # 1. 严格检查：只要检测到重拨正在运行 (无论是手动、定时还是 QoS 触发)
+                if is_redial_running():
+                    consecutive_fails = 0  # 立即清零失败计数，防止断网重拨期间误判
+                    set_redial_cooldown(cooldown, reason="光猫正在执行重拨换 IP")
+                    write_live_qos_cooldown_log(fail_threshold, interval, "光猫正在执行重拨换 IP，连通性监测避让保护中...")
+                    time.sleep(3)
+                    continue
+
+                # 2. 严格检查：重拨开始或完成后的冷却保护期
+                is_cooling, rem_sec, cool_reason = get_redial_cooldown_remaining()
+                if is_cooling:
+                    consecutive_fails = 0  # 冷却期间清零失败计数，严防误判
+                    write_live_qos_cooldown_log(fail_threshold, interval, f"重拨冷却缓冲中 (剩余 {rem_sec} 秒)...")
+                    time.sleep(min(3, max(1, rem_sec)))
+                    continue
+
                 # 执行 UDP 检测 (完整探测全部目标，输出完整实时指标)
                 res = check_all_udp_targets(targets, quick_exit=False, timeout=1.5)
                 if res["all_failed"]:
@@ -1520,7 +1605,7 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                                 )
                                 write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"重拨换 IP 失败，将在 {cooldown} 秒后重试")
 
-                            time.sleep(max(10, cooldown))
+                            # redial_wan 内部已自动设置冷却截止时间戳，此处直接 continue 进入顶层冷却倒计时保护逻辑
                             continue
                 else:
                     if consecutive_fails > 0:
@@ -1528,7 +1613,13 @@ def run_udp_watchdog(log_file: str = "/tmp/log/modem_redial.log"):
                     consecutive_fails = 0
                     write_live_qos_log(res, 0, fail_threshold, interval, status_note=f"首通节点: {res.get('working_target', '')}")
 
-                time.sleep(max(5, interval))
+                # 采用切片休眠 (每秒检查一次)，一旦重拨开始立即中断休眠并进入避让冷却状态
+                sleep_seconds = max(5, interval)
+                t_sleep_end = time.time() + sleep_seconds
+                while time.time() < t_sleep_end:
+                    if is_redial_running() or get_redial_cooldown_remaining()[0]:
+                        break
+                    time.sleep(min(1.0, max(0.1, t_sleep_end - time.time())))
             except Exception as e:
                 log(f"[!] [UDP Watchdog] 监测运行异常: {e}", log_file)
                 time.sleep(30)
@@ -1644,6 +1735,38 @@ def main():
         sys.exit(0)
 
     if args.test_udp:
+        # 若光猫当前正在重拨或处于冷却保护期，主动避让，不发送探测包
+        if is_redial_running():
+            log_text = write_live_qos_cooldown_log(
+                int(uci_conf.get("udp_fail_threshold", "2") or "2"),
+                int(uci_conf.get("udp_check_interval", "60") or "60"),
+                "光猫正在执行重拨换 IP，连通性探测主动避让中"
+            )
+            print(json.dumps({
+                "all_failed": False,
+                "any_ok": True,
+                "error": "光猫正在执行重拨换 IP，连通性探测已主动避让，请待重拨完成后再测。",
+                "log_text": log_text,
+                "results": []
+            }, ensure_ascii=False))
+            sys.exit(0)
+
+        is_cooling, rem_sec, cool_reason = get_redial_cooldown_remaining()
+        if is_cooling:
+            log_text = write_live_qos_cooldown_log(
+                int(uci_conf.get("udp_fail_threshold", "2") or "2"),
+                int(uci_conf.get("udp_check_interval", "60") or "60"),
+                f"处于重拨冷却保护期 (剩余 {rem_sec} 秒)，连通性探测主动避让中"
+            )
+            print(json.dumps({
+                "all_failed": False,
+                "any_ok": True,
+                "error": f"当前处于重拨冷却保护期 (剩余 {rem_sec} 秒)，为避免网络波动冲突已主动避让探测。",
+                "log_text": log_text,
+                "results": []
+            }, ensure_ascii=False))
+            sys.exit(0)
+
         targets = uci_conf.get("udp_targets") or DEFAULT_UDP_TARGETS
         if isinstance(targets, str):
             targets = [t.strip() for t in targets.split() if t.strip()]
@@ -1717,6 +1840,8 @@ def main():
 
     # 若指定了 --start，执行彻底脱离父进程的 Unix 双 fork 守护进程化
     if args.start:
+        cooldown = int(uci_conf.get("udp_cooldown", "180") or "180")
+        set_redial_cooldown(cooldown, reason="正在启动后台重拨换 IP 任务")
         daemonize(args.logfile)
 
     write_pid()

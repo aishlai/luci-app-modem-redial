@@ -1,38 +1,40 @@
-# Release v1.5.7 / 版本发布说明
+# Release v1.5.8 / 版本发布说明
 
 ## 🇨🇳 中文更新日志 (Changelog in Chinese)
 
-### ⚡ 页面加载极速优化：彻底解决首次进入卡顿与更新检测阻塞
+### 🛡️ 重拨全流程与 UDP 连通性监测避让保护：彻底消除断网期间误判冲突
 
-1. **静默更新检测完全异步化与 30 分钟内存缓存**
-   - **痛点分析**：旧版本在页面载入 1 秒后便立即向 GitHub 发起更新请求；因国内直连 GitHub API 经常遭遇 GFW 丢包或 6 秒超时挂起，导致占用 `rpcd` 进程并严重阻塞网页的初次渲染和交互体验；特别是在刚升级完成自动刷新时，卡顿感知尤为明显；
-   - **30 分钟内存极速缓存**：在 `/tmp/log/modem_redial_update_cache.json` 中建立非持久化内存缓存，首次进入优先读取缓存（0 毫秒即时返回），杜绝频繁请求 GitHub；
-   - **延时 3.5 秒后台异步触发**：若无缓存或缓存过期，延时至页面各区块完全渲染展示 3.5 秒后才在后台以非阻塞 Promise 执行静默检测，保障初次进入页面瞬间完成渲染；
-   - **升级后即时注入最新态**：一键升级成功后，底层立即就地写入「已是最新版」缓存，页面刷新后零延迟秒开。
+1. **重拨开始即刻触发冷却保护（全入口无缝覆盖）**
+   - **痛点分析**：光猫在执行重新拨号（无论是由用户在网页后台点击「立即重拨」、定时任务触发、还是 QoS 阻断自动触发）期间，WAN 口网络必定会经历数十秒的暂时断网。旧版本中 UDP 监测守护进程若在此期间继续发包，会导致探测包全部丢包超时，累加失败计数并导致日志红字报错，甚至产生误判死循环；
+   - **毫秒级即时冷却锁定**：在 `/usr/bin/modem_redial` 启动脚本、Python CLI `--start` 及 `redial_wan` 入口处，只要重拨一旦启动，毫秒级在 `/tmp/run/modem_redial_cooldown.time` 写入冷却保护时间戳（严格采用用户配置的 `udp_cooldown` 时长，默认 180 秒）；
+   - **失败计数即刻归零**：检测到重拨运行或处于冷却期时，后台守护进程将连续失败计数器 `consecutive_fails` 强制清零，杜绝任何误触二次重拨的可能。
 
-2. **加速镜像智能优先与超时收紧**
-   - 彻底摒弃优先直连 `api.github.com`（易超时 6 秒）的落后设计，改为优先通过极速加速镜像（`ghfast.top`）在 2.5 秒内极速探测版本号，彻底根除 GFW 造成的数秒级挂起。
+2. **守护进程 1 秒细粒度切片感知与动态倒计时**
+   - **切片中断响应**：监测主循环在等待检测周期间采用 1 秒细粒度切片检测，一旦外部触发重拨，监测进程在 1 秒内即可精准感知并退出休眠，立即转入避让状态，绝不滞后发包；
+   - **实时黑框友好呈现**：在重拨及后续冷却保护期内，实时监测日志黑框状态自动标示为 `⏸️ 避让`，状态栏动态更新倒计时：`重拨冷却缓冲中 (剩余 X 秒)...`，日志内容干净规整；
+   - **冷却结束后无缝恢复**：冷却时间完全走完后，后台守护进程自动且无缝地恢复正常的 UDP 连通性监测。
 
-3. **光猫状态 5 秒短时防挤占缓存**
-   - 为光猫登录状态查询增加 5 秒短时防抖缓存，避免浏览器快速重载时反复与光猫握手建立会话，进一步提升初次进入与页面刷新的流畅度。
+3. **LuCI 网页手动探测智能互斥保护**
+   - 当光猫正在重拨或处于冷却期时，若用户在网页端点击「⚡ 立即探测一轮」或「📊 详细体检弹窗」，插件底层将主动拦截探测请求，返回友好的避让提示并保持日志整洁，不再盲目向断开的网络发送无意义的探测包。
 
 ---
 
 ## 🇺🇸 English Changelog
 
-### ⚡ Page Load Optimization: Resolved Initial Load Lag & Decoupled Update Check
+### 🛡️ Redial & UDP Watchdog Avoidance System: Eliminated Monitoring Conflicts During Disconnection
 
-1. **Fully Asynchronous Silent Update Check & 30-Minute RAM Cache**
-   - **Root Cause**: Previously, the plugin fired a synchronous-style GitHub update check just 1 second after page load. In regions where direct access to `api.github.com` is throttled or dropped, the 6-second TCP timeout tied up `rpcd` workers, causing noticeable UI freeze—especially on the first page load right after an upgrade.
-   - **30-Minute RAM Cache**: Implemented in-memory caching (`/tmp/log/modem_redial_update_cache.json`). Silent auto-checks now return within 0.001 seconds from cache.
-   - **Deferred Background Execution (3.5s)**: If cache is absent, silent checks run asynchronously 3.5 seconds after page render, ensuring 100% smooth initial user interaction.
-   - **Instant Post-Upgrade Cache Injection**: Upon successful in-place upgrade, the cache is immediately written with the newest version status, allowing instant page reloads.
+1. **Instant Cooldown Activation Across All Triggers**
+   - **Problem**: When the modem redials (via LuCI Web UI "Redial Now", scheduled cron, or QoS watchdog trigger), the WAN link drops temporarily. Probing UDP targets during this outage caused packet loss, inflated consecutive failure counts, and produced false alarm log errors.
+   - **Sub-millisecond Lock**: Redial execution instantly registers an avoidance timestamp into `/tmp/run/modem_redial_cooldown.time` based on the configured `udp_cooldown` setting (default 180s).
+   - **Zeroed Failure Counters**: While redialing or in cooldown, consecutive failure counters are strictly reset to 0 to prevent accidental recursive triggers.
 
-2. **Mirror Acceleration Priority & Tighter Timeouts**
-   - Prioritizes domestic mirror routes (`ghfast.top`) with 2.5s timeouts, eliminating the classic 6s GFW hangs.
+2. **1-Second Sliced Sensing & Dynamic Live Countdown**
+   - **Instant Interruption**: The watchdog polling interval uses 1-second sleep slicing. As soon as a redial is initiated, the watchdog interrupts its sleep within 1s and engages avoidance protection.
+   - **Clear Live Status Display**: Targets in the live log box are rendered with `⏸️ 避让` (Avoidance) status, accompanied by a dynamic countdown `重拨冷却缓冲中 (剩余 X 秒)...`.
+   - **Seamless Resumption**: Normal connectivity checks resume automatically once the cooldown buffer completely elapses.
 
-3. **5-Second Debounce Cache for Modem Status Query**
-   - Prevents consecutive HTTP handshake storms to the Huawei ONT upon page reloads.
+3. **Intelligent UI Probe Interception**
+   - Clicking "Single Probe" or "Diagnostics Modal" in the LuCI UI while a redial or cooldown is active is cleanly intercepted with an informative alert, preventing probe attempts against a disconnected link.
 
 ---
 
@@ -40,10 +42,10 @@
 
 **通过 LuCI 网页后台一键升级 / Web UI In-place Upgrade**:
 1. 进入 OpenWrt 后台 -> `网络` -> `光猫重拨助手`；
-2. 页面右上角将自动检测到 `v1.5.7` 更新，点击 `🚀 立即一键在线升级` 即可极速完成升级。
+2. 页面右上角将自动检测到 `v1.5.8` 更新，点击 `🚀 立即一键在线升级` 即可极速完成升级。
 
 **OpenWrt 命令行安装 / Upgrade via SSH**:
 ```bash
 opkg update && opkg install python3
-opkg install --force-reinstall luci-app-modem-redial_1.5.7-1_all.ipk
+opkg install --force-reinstall luci-app-modem-redial_1.5.8-1_all.ipk
 ```

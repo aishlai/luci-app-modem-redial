@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.7';
+var PLUGIN_VERSION = 'v1.5.8';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -195,7 +195,7 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.default = '180';
 		o.placeholder = '180';
-		o.description = _('触发重拨换 IP 成功后，暂停检测的冷却时间，给新网络足够的稳定时间，默认 180 秒。');
+		o.description = _('光猫开始重拨（无论手动、定时还是 QoS 触发）将立即暂停 UDP 监测并启动冷却保护，重拨完成后继续维持缓冲倒计时，待网络与新 IP 彻底稳定后再恢复探测，默认 180 秒。');
 		o.rmempty = false;
 		o.retain = true;
 
