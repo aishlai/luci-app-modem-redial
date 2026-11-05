@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.3.4';
+var PLUGIN_VERSION = 'v1.3.5';
 
 return view.extend({
 	load: function() {
@@ -26,13 +26,7 @@ return view.extend({
 		s.anonymous = true;
 		s.addremove = false;
 
-		// 1. 主功能开关 (启用插件) - 放在最顶部
-		o = s.option(form.Flag, 'enabled', _('启用插件'));
-		o.default = '0';
-		o.rmempty = false;
-		o.description = _('开启或关闭光猫重拨助手。关闭时将自动停用运行状态与操作面板、定时重拨、UDP QoS 监测与 Ntfy 消息通知。');
-
-		// 2. 插件关闭时显示的提示卡片
+		// 1. 插件关闭时在顶部显示的提示卡片
 		o = s.option(form.DummyValue, '_disabled_status');
 		o.depends('enabled', '0');
 		o.rawhtml = true;
@@ -40,11 +34,11 @@ return view.extend({
 			return '<div style="background:rgba(0,0,0,0.02);border:1px dashed #d9d9d9;border-radius:6px;padding:22px 16px;text-align:center;margin:12px 0 18px 0;">' +
 				'<div style="font-size:32px;margin-bottom:8px;">⏸️</div>' +
 				'<div style="font-size:16px;font-weight:600;color:#666;">' + _('插件当前处于关闭状态') + '</div>' +
-				'<div style="font-size:13px;color:#999;margin-top:6px;">' + _('开启上方「启用插件」开关并保存应用后，将恢复运行状态监控、定时自动重拨、UDP QoS 智能监测与 Ntfy 消息推送。') + '</div>' +
+				'<div style="font-size:13px;color:#999;margin-top:6px;">' + _('请在下方「光猫登录与参数配置」中开启「启用插件」并保存应用后，将自动恢复运行状态监控、定时自动重拨、UDP QoS 监测与 Ntfy 消息推送。') + '</div>' +
 			'</div>';
 		};
 
-		// 3. 插件开启时显示的运行状态面板与操作卡片
+		// 2. 插件开启时在顶部显示的运行状态面板与操作卡片
 		o = s.option(form.DummyValue, '_status');
 		o.depends('enabled', '1');
 		o.rawhtml = true;
@@ -107,7 +101,7 @@ return view.extend({
 			'</div>';
 		};
 
-		// 4. 基本参数设置 (始终可编辑，方便初次配置)
+		// 3. 基本参数设置 (始终可编辑，方便初次配置)
 		o = s.option(form.DummyValue, '_header_params');
 		o.rawhtml = true;
 		o.cfgvalue = function() {
@@ -115,6 +109,12 @@ return view.extend({
 				'<h3 style="font-size:15px;font-weight:600;color:#1890ff;margin:0 0 8px 0;display:inline-block;">⚙️ ' + _('光猫登录与参数配置') + '</h3>' +
 			'</div>';
 		};
+
+		// 主功能开关 (启用插件) - 放置在「光猫登录与参数配置」区域内
+		o = s.option(form.Flag, 'enabled', _('启用插件'));
+		o.default = '0';
+		o.rmempty = false;
+		o.description = _('开启或关闭光猫重拨助手。关闭时将自动停用顶部的运行状态面板、定时重拨、UDP QoS 监测与 Ntfy 消息通知。');
 
 		o = s.option(form.Value, 'router_url', _('光猫后台地址'));
 		o.default = '';
