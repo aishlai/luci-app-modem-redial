@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.8-1"
+__version__ = "1.5.9-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
@@ -535,6 +535,38 @@ class HuaweiONTClient:
 STATUS_CACHE_FILE = "/tmp/log/modem_redial_status_cache.json"
 
 
+def format_conn_status_cn(status: str) -> str:
+    """转换光猫连接状态为中文"""
+    if not status or status == "未知":
+        return "未知"
+    s_lower = str(status).strip().lower()
+    if s_lower == "connected" or status == "已连接":
+        return "已连接"
+    elif s_lower == "connecting" or status == "正在连接":
+        return "正在连接"
+    elif s_lower in ("disconnected", "unconnected") or status in ("未连接", "已断开"):
+        return "未连接"
+    elif s_lower == "disconnecting" or status == "正在断开":
+        return "正在断开"
+    return status
+
+
+def format_trigger_mode_cn(trigger: str) -> str:
+    """转换拨号模式为中文"""
+    if not trigger or trigger == "-" or trigger == "未知":
+        return trigger or "-"
+    t_lower = str(trigger).strip().lower()
+    if t_lower == "alwayson" or trigger == "自动拨号":
+        return "自动拨号"
+    elif t_lower == "manual" or trigger == "手动拨号":
+        return "手动拨号"
+    elif t_lower == "ondemand" or trigger == "按需拨号":
+        return "按需拨号"
+    elif trigger == "切换中":
+        return "切换中"
+    return trigger
+
+
 def query_status_json(router_ip: str, username: str, password: str, wan_name: str, force: bool = False) -> str:
     """输出 JSON 格式状态供 LuCI 前端异步读取 (支持 5 秒短时缓存，避免快速重入时重复登录光猫)"""
     uci_conf = load_uci_config()
@@ -589,12 +621,16 @@ def query_status_json(router_ip: str, username: str, password: str, wan_name: st
             if not target:
                 ret_obj = {"status": "未找到指定WAN", "ip": "未知", "trigger": "未知", "wan": wan_name, "running": False}
             else:
+                raw_status = target.get("status", "")
+                raw_trigger = target.get("trigger", "")
                 ret_obj = {
-                    "status": target["status"],
-                    "ip": target["ip"],
-                    "trigger": target["trigger"],
-                    "wan": target["name"],
-                    "domain": target["domain"],
+                    "status": format_conn_status_cn(raw_status),
+                    "raw_status": raw_status,
+                    "ip": target.get("ip", "未知"),
+                    "trigger": format_trigger_mode_cn(raw_trigger),
+                    "raw_trigger": raw_trigger,
+                    "wan": target.get("name", wan_name),
+                    "domain": target.get("domain", ""),
                     "running": False
                 }
     except Exception as e:

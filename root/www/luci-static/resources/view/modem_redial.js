@@ -4,7 +4,41 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.8';
+var PLUGIN_VERSION = 'v1.5.9';
+
+function formatConnStatus(status) {
+	if (!status || status === '未知') return _('未知');
+	var s = String(status).trim();
+	var sLower = s.toLowerCase();
+	if (sLower === 'connected' || s === '已连接') return _('已连接');
+	if (sLower === 'connecting' || s === '正在连接') return _('正在连接');
+	if (sLower === 'disconnected' || sLower === 'unconnected' || s === '未连接' || s === '已断开') return _('未连接');
+	if (sLower === 'disconnecting' || s === '正在断开') return _('正在断开');
+	if (s === '未配置') return _('未配置');
+	if (s === '未启用') return _('未启用');
+	if (s === '重拨中...' || s === '重拨中') return _('重拨中...');
+	return s;
+}
+
+function formatTriggerMode(trigger) {
+	if (!trigger || trigger === '-' || trigger === '未知') return trigger || '-';
+	var t = String(trigger).trim();
+	var tLower = t.toLowerCase();
+	if (tLower === 'alwayson' || t === '自动拨号') return _('自动拨号');
+	if (tLower === 'manual' || t === '手动拨号') return _('手动拨号');
+	if (tLower === 'ondemand' || t === '按需拨号') return _('按需拨号');
+	if (t === '切换中') return _('切换中');
+	return t;
+}
+
+function getConnStatusColor(status) {
+	if (!status) return '#ffc107';
+	var s = String(status).trim().toLowerCase();
+	if (s === 'connected' || status === '已连接') return '#28a745';
+	if (s === 'disconnected' || s === 'unconnected' || status === '未连接' || status === '已断开') return '#dc3545';
+	if (status === '未配置' || status === '未启用') return '#6c757d';
+	return '#ffc107'; // 正在连接、正在断开、重拨中...
+}
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -43,11 +77,11 @@ return view.extend({
 				statusObj = JSON.parse(raw || '{}');
 			} catch(e) {}
 			var currentIP = statusObj.ip || '未知';
-			var connStatus = statusObj.status || '未知';
-			var triggerMode = statusObj.trigger || '-';
+			var connStatus = formatConnStatus(statusObj.status);
+			var triggerMode = formatTriggerMode(statusObj.trigger);
 			var wanName = statusObj.wan || '2_INTERNET_R_VID_3961';
 
-			var statusColor = (connStatus === 'Connected' || connStatus === '已连接') ? '#28a745' : ((connStatus === 'Disconnected' || connStatus === '未连接') ? '#dc3545' : (connStatus === '未配置' || connStatus === '未启用' ? '#6c757d' : '#ffc107'));
+			var statusColor = getConnStatusColor(connStatus);
 
 			return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;margin-top:5px;">' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:12px 14px;">' +
@@ -669,12 +703,14 @@ return view.extend({
 				try {
 					var raw = (res && res.stdout) ? res.stdout : res;
 					var data = JSON.parse(raw || '{}');
+					var dispStatus = formatConnStatus(data.status);
+					var dispTrigger = formatTriggerMode(data.trigger);
 					if (ipEl) ipEl.innerText = data.ip || '未知';
 					if (statusEl) {
-						statusEl.innerText = data.status || '未知';
-						statusEl.style.color = (data.status === 'Connected' || data.status === '已连接') ? '#28a745' : ((data.status === 'Disconnected' || data.status === '未连接') ? '#dc3545' : (data.status === '未配置' || data.status === '未启用' ? '#6c757d' : '#ffc107'));
+						statusEl.innerText = dispStatus;
+						statusEl.style.color = getConnStatusColor(dispStatus);
 					}
-					if (triggerEl) triggerEl.innerText = data.trigger || '-';
+					if (triggerEl) triggerEl.innerText = dispTrigger;
 
 					// 严格检查：当且仅当非刚完成重拨且无活动倒计时/轮询时，才跟随 running 开启轮询
 					if (data.running && !window._autoCloseModalTimer && !window._redialJustFinished && !window._modemRedialTimer) {

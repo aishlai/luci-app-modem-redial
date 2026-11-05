@@ -288,12 +288,16 @@ def query_status(
             print(f"[-] 未找到包含 '{target_wan_name}' 的 WAN 连接！")
             return False
 
+        raw_st = target_wan.get('status', '')
+        raw_tr = target_wan.get('trigger', '')
+        status_cn = "已连接" if raw_st == "Connected" else ("未连接" if raw_st in ("Disconnected", "Unconnected") else raw_st)
+        trigger_cn = "自动拨号 (AlwaysOn)" if raw_tr == "AlwaysOn" else ("手动拨号 (Manual)" if raw_tr == "Manual" else raw_tr)
         print("\n" + "=" * 50)
         print(f"[✓] 当前连接状态:")
         print(f"    - 连接名称:     {target_wan['name']}")
         print(f"    - 公网 IP 地址: {target_wan['ip']}")
-        print(f"    - 连接状态:     {target_wan['status']}")
-        print(f"    - 拨号模式:     {target_wan['trigger']}")
+        print(f"    - 连接状态:     {status_cn}")
+        print(f"    - 拨号模式:     {trigger_cn}")
         print(f"    - TR-069 节点:  {target_wan['domain']}")
         print("=" * 50 + "\n")
         return True
