@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.2';
+var PLUGIN_VERSION = 'v1.5.3';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
@@ -214,15 +214,10 @@ return view.extend({
 				'<textarea id="modem_redial_live_qos_log" class="cbi-input-textarea" style="width:100%;height:310px;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;line-height:1.45;box-sizing:border-box;resize:vertical;" readonly="readonly" placeholder="' + _('暂无实时监测数据。后台守护进程每轮检测后将自动在此覆盖刷新，也可点击下方「⚡ 立即探测一轮」...') + '">' +
 				initLiveLog +
 				'</textarea>' +
-				'<div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:12px;">' +
-					'<div>' +
-						'<button type="button" class="btn cbi-button cbi-button-action" id="btn_refresh_live_qos_log" onclick="window.refreshLiveQosLog()" style="margin-right:8px;">🔄 ' + _('刷新实时日志') + '</button>' +
-						'<button type="button" class="btn cbi-button cbi-button-apply" id="btn_run_single_probe" onclick="window.runSingleUdpProbe()" style="margin-right:8px;">⚡ ' + _('立即探测一轮') + '</button>' +
-						'<button type="button" class="btn cbi-button" id="btn_modal_test_udp" onclick="window.testCurrentUdp()">📊 ' + _('详细体检弹窗') + '</button>' +
-					'</div>' +
-					'<div style="font-size:12px;color:#888;">' +
-						_('💡 说明: 本日志保存在内存中 (/tmp)，每轮检测自动刷新覆盖，不消耗闪存寿命。') +
-					'</div>' +
+				'<div style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">' +
+					'<button type="button" class="btn cbi-button cbi-button-action" id="btn_refresh_live_qos_log" onclick="window.refreshLiveQosLog()">🔄 ' + _('刷新实时日志') + '</button>' +
+					'<button type="button" class="btn cbi-button cbi-button-apply" id="btn_run_single_probe" onclick="window.runSingleUdpProbe()">⚡ ' + _('立即探测一轮') + '</button>' +
+					'<button type="button" class="btn cbi-button" id="btn_modal_test_udp" onclick="window.testCurrentUdp()">📊 ' + _('详细体检弹窗') + '</button>' +
 				'</div>' +
 			'</div>';
 		};

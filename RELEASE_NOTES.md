@@ -1,16 +1,12 @@
-# Release v1.5.2 / 版本发布说明
+# Release v1.5.3 / 版本发布说明
 
 ## 🇨🇳 中文更新日志 (Changelog in Chinese)
 
-### 🎨 界面视觉与交互排版优化
+### 🎨 界面视觉与排版优化
 
-1. **实时连通性监测日志看板高度调优**
-   - 将「监测重拨」标签页中的实时监测黑底终端看板高度由 `190px` 适度调高至 `310px`；
-   - 完美适配 16 行完整探测报告（表头、网络状态诊断、全部公共节点延迟与详情），无需手动上下滚动即可一览全貌。
-
-2. **操作按钮左对齐与说明文本顺序调整**
-   - 调换底部控制栏顺序：将三个操作按钮（`🔄 刷新实时日志`、`⚡ 立即探测一轮`、`📊 详细体检弹窗`）靠左统一对齐放置；
-   - 内存免磨损说明文本（`💡 说明: 本日志保存在内存中 (/tmp)，每轮检测自动刷新覆盖，不消耗闪存寿命。`）紧随按钮之后展示，布局层级更清晰，点击更顺手。
+1. **精简实时监测控制栏，去除冗余说明文字**
+   - 移除了控制栏底部按钮旁冗余的说明文字（`💡 说明: 本日志保存在内存中 (/tmp)...`），由于实时日志框头部已清晰内嵌此项提示，精简后界面更加利落；
+   - 操作按钮（`🔄 刷新实时日志`、`⚡ 立即探测一轮`、`📊 详细体检弹窗`）保持统一靠左对齐，间距规整。
 
 ---
 
@@ -18,23 +14,20 @@
 
 ### 🎨 UI & Layout Enhancements
 
-1. **Expanded Live Telemetry Log View Height**
-   - Increased the height of the live telemetry terminal box from `190px` to `310px`.
-   - Comfortably renders the full 16-line telemetry report (headers, network diagnosis, all probe targets, and latencies) without requiring manual scrolling.
-
-2. **Left-Aligned Action Buttons & Reordered Legend**
-   - Reordered the control footer: action buttons (`🔄 Refresh Live Log`, `⚡ Probe Round Now`, `📊 Detailed Diagnostics`) are now neatly left-aligned for quicker access.
-   - The memory-only zero-flash-wear notice is positioned following the buttons, providing a clean and intuitive layout.
+1. **Simplified Live Telemetry Action Bar**
+   - Removed the redundant explanation note next to the action buttons, as the in-memory temporary nature is already explicitly embedded in the log header.
+   - Action buttons (`🔄 Refresh Live Log`, `⚡ Probe Round Now`, `📊 Detailed Diagnostics`) are cleanly left-aligned with a compact, uniform layout.
 
 ---
 
-### 📦 Installation & Upgrade / 安装与升级说明
+### 📦 安装与升级说明 (Installation & Upgrade)
 
-**iStoreOS 用户**:
-直接在 iStore 商店中点击【手动安装】，上传 `.ipk` 文件即可。
+**通过 LuCI 网页后台一键升级 / Web UI In-place Upgrade**:
+1. 进入 OpenWrt 后台 -> `网络` -> `光猫重拨助手`；
+2. 页面右上角将自动检测到 `v1.5.3` 更新，点击 `🚀 立即一键在线升级` 即可全自动平滑更新，配置与规则自动保留。
 
 **OpenWrt 命令行安装 / Upgrade via SSH**:
 ```bash
 opkg update && opkg install python3
-opkg install --force-reinstall luci-app-modem-redial_1.5.2-1_all.ipk
+opkg install --force-reinstall luci-app-modem-redial_1.5.3-1_all.ipk
 ```
