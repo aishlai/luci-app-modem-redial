@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.3.3';
+var PLUGIN_VERSION = 'v1.3.4';
 
 return view.extend({
 	load: function() {
@@ -21,11 +21,32 @@ return view.extend({
 		m = new form.Map('modem_redial', _('光猫重拨助手') + ' (' + PLUGIN_VERSION + ')',
 			_('专为北京联通定制版华为光猫 V271-20 设计，通过控制光猫后台快速切换手动与自动拨号，实现秒级重新拨号换IP，有效解除运营商 UDP QoS 限速与网络阻断。'));
 
-		// 运行状态与操作卡片 (无多余标题，直接平铺展示卡片与按钮)
+		// 所有配置归入同一个 NamedSection，使 LuCI 的 form.js 依赖引擎 (depends) 能够全域响应主开关
 		s = m.section(form.NamedSection, 'config', 'modem_redial');
 		s.anonymous = true;
+		s.addremove = false;
 
+		// 1. 主功能开关 (启用插件) - 放在最顶部
+		o = s.option(form.Flag, 'enabled', _('启用插件'));
+		o.default = '0';
+		o.rmempty = false;
+		o.description = _('开启或关闭光猫重拨助手。关闭时将自动停用运行状态与操作面板、定时重拨、UDP QoS 监测与 Ntfy 消息通知。');
+
+		// 2. 插件关闭时显示的提示卡片
+		o = s.option(form.DummyValue, '_disabled_status');
+		o.depends('enabled', '0');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="background:rgba(0,0,0,0.02);border:1px dashed #d9d9d9;border-radius:6px;padding:22px 16px;text-align:center;margin:12px 0 18px 0;">' +
+				'<div style="font-size:32px;margin-bottom:8px;">⏸️</div>' +
+				'<div style="font-size:16px;font-weight:600;color:#666;">' + _('插件当前处于关闭状态') + '</div>' +
+				'<div style="font-size:13px;color:#999;margin-top:6px;">' + _('开启上方「启用插件」开关并保存应用后，将恢复运行状态监控、定时自动重拨、UDP QoS 智能监测与 Ntfy 消息推送。') + '</div>' +
+			'</div>';
+		};
+
+		// 3. 插件开启时显示的运行状态面板与操作卡片
 		o = s.option(form.DummyValue, '_status');
+		o.depends('enabled', '1');
 		o.rawhtml = true;
 		o.cfgvalue = function() {
 			var statusObj = {};
@@ -38,62 +59,62 @@ return view.extend({
 			var triggerMode = statusObj.trigger || '-';
 			var wanName = statusObj.wan || '2_INTERNET_R_VID_3961';
 
-			var statusColor = (connStatus === 'Connected' || connStatus === '已连接') ? '#28a745' : ((connStatus === 'Disconnected' || connStatus === '未连接') ? '#dc3545' : (connStatus === '未配置' ? '#6c757d' : '#ffc107'));
+			var statusColor = (connStatus === 'Connected' || connStatus === '已连接') ? '#28a745' : ((connStatus === 'Disconnected' || connStatus === '未连接') ? '#dc3545' : (connStatus === '未配置' || connStatus === '未启用' ? '#6c757d' : '#ffc107'));
 
 			var escapedLog = (data[0] || '暂无执行日志').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-			return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;">' +
+			return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;margin-top:10px;">' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 14px;">' +
-					'<div style="font-size:12px;color:#888;">当前公网 IP</div>' +
+					'<div style="font-size:12px;color:#888;">' + _('当前公网 IP') + '</div>' +
 					'<div id="modem_current_ip" style="font-size:18px;font-weight:600;color:#333;">' + currentIP + '</div>' +
 				'</div>' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 14px;">' +
-					'<div style="font-size:12px;color:#888;">连接状态</div>' +
+					'<div style="font-size:12px;color:#888;">' + _('连接状态') + '</div>' +
 					'<div id="modem_conn_status" style="font-size:18px;font-weight:600;color:' + statusColor + ';">' + connStatus + '</div>' +
 				'</div>' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 14px;">' +
-					'<div style="font-size:12px;color:#888;">当前拨号模式</div>' +
+					'<div style="font-size:12px;color:#888;">' + _('当前拨号模式') + '</div>' +
 					'<div id="modem_trigger_mode" style="font-size:16px;font-weight:600;color:#333;">' + triggerMode + '</div>' +
 				'</div>' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 14px;">' +
-					'<div style="font-size:12px;color:#888;">目标 WAN 接口</div>' +
+					'<div style="font-size:12px;color:#888;">' + _('目标 WAN 接口') + '</div>' +
 					'<div style="font-size:14px;font-weight:600;color:#333;word-break:break-all;">' + wanName + '</div>' +
 				'</div>' +
 			'</div>' +
 			'<div style="margin: 10px 0;">' +
 				'<button type="button" class="btn cbi-button-apply" id="btn_manual_redial" onclick="window.triggerModemRedial()">' +
-					'⚡ 立即重拨换IP' +
+					'⚡ ' + _('立即重拨换IP') +
 				'</button>' +
 				'&nbsp;&nbsp;' +
 				'<button type="button" class="btn cbi-button-reset" onclick="window.refreshModemStatus()">' +
-					'🔄 刷新状态' +
+					'🔄 ' + _('刷新状态') +
 				'</button>' +
 				'&nbsp;&nbsp;' +
 				'<button type="button" class="btn cbi-button-remove" onclick="window.clearModemLog()">' +
-					'🗑️ 清空日志' +
+					'🗑️ ' + _('清空日志') +
 				'</button>' +
 				'&nbsp;&nbsp;' +
 				'<button type="button" class="btn cbi-button-action" id="btn_check_update" onclick="window.checkPluginUpdate()">' +
-					'🚀 检查更新' +
+					'🚀 ' + _('检查更新') +
 				'</button>' +
 				'<span id="check_update_tip" style="margin-left:10px;vertical-align:middle;display:inline-block;"></span>' +
 			'</div>' +
 			'<div style="margin-top:10px;">' +
-				'<div style="font-size:12px;color:#888;margin-bottom:4px;">实时执行日志 (最近输出):</div>' +
+				'<div style="font-size:12px;color:#888;margin-bottom:4px;">' + _('实时执行日志 (最近输出):') + '</div>' +
 				'<textarea id="modem_redial_log" readonly style="width:100%;height:220px;background:#1e1e1e;color:#d4d4d4;font-family:monospace;padding:8px;border-radius:4px;box-sizing:border-box;resize:vertical;">' +
 					escapedLog +
 				'</textarea>' +
 			'</div>';
 		};
 
-		// 基本参数设置
-		s = m.section(form.NamedSection, 'config', 'modem_redial', _('参数配置'));
-		s.anonymous = true;
-		s.addremove = false;
-
-		o = s.option(form.Flag, 'enabled', _('启用插件'));
-		o.default = '0';
-		o.rmempty = false;
+		// 4. 基本参数设置 (始终可编辑，方便初次配置)
+		o = s.option(form.DummyValue, '_header_params');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="padding-top:16px;margin-bottom:6px;border-bottom:1px solid #e8e8e8;">' +
+				'<h3 style="font-size:15px;font-weight:600;color:#1890ff;margin:0 0 8px 0;display:inline-block;">⚙️ ' + _('光猫登录与参数配置') + '</h3>' +
+			'</div>';
+		};
 
 		o = s.option(form.Value, 'router_url', _('光猫后台地址'));
 		o.default = '';
@@ -122,30 +143,44 @@ return view.extend({
 		o.description = _('切换为手动拨号后，等待光猫完全下线的暂停时间，默认 3 秒');
 		o.rmempty = false;
 
-		// 定时任务
-		s = m.section(form.NamedSection, 'config', 'modem_redial', _('定时自动重拨换IP'));
-		s.anonymous = true;
+		// 5. 定时自动重拨换IP (仅启用插件时可见)
+		o = s.option(form.DummyValue, '_header_cron');
+		o.depends('enabled', '1');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="padding-top:20px;margin-bottom:6px;border-bottom:1px solid #e8e8e8;">' +
+				'<h3 style="font-size:15px;font-weight:600;color:#1890ff;margin:0 0 8px 0;display:inline-block;">⏰ ' + _('定时自动重拨换IP') + '</h3>' +
+			'</div>';
+		};
 
 		o = s.option(form.Flag, 'cron_enabled', _('启用定时自动重拨'));
+		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'cron_time', _('Cron 表达式'));
-		o.depends('cron_enabled', '1');
+		o.depends({ 'enabled': '1', 'cron_enabled': '1' });
 		o.default = '0 4 * * *';
 		o.description = _('标准 Crontab 5位表达式，例如：<code>0 4 * * *</code> (每天凌晨4点重拨换IP)；<code>0 */6 * * *</code> (每6小时重拨一次)');
 
-		// UDP 连通性监测与 QoS 自动重拨
-		s = m.section(form.NamedSection, 'config', 'modem_redial', _('UDP 连通性监测与 QoS 自动重拨'));
-		s.anonymous = true;
+		// 6. UDP 连通性监测与 QoS 自动重拨 (仅启用插件时可见)
+		o = s.option(form.DummyValue, '_header_udp');
+		o.depends('enabled', '1');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="padding-top:20px;margin-bottom:6px;border-bottom:1px solid #e8e8e8;">' +
+				'<h3 style="font-size:15px;font-weight:600;color:#1890ff;margin:0 0 8px 0;display:inline-block;">🛡️ ' + _('UDP 连通性监测与 QoS 自动重拨') + '</h3>' +
+			'</div>';
+		};
 
 		o = s.option(form.Flag, 'udp_watchdog_enabled', _('启用 UDP 连通性监测'));
+		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
 		o.description = _('后台定期测试多个可靠公共节点的 UDP 双向通讯。当全部目标 UDP 均无法连通（疑似被运营商 QoS 限制/断流）时，自动触发光猫重拨换 IP。');
 
 		o = s.option(form.Value, 'udp_check_interval', _('检测间隔时间 (秒)'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.datatype = 'uinteger';
 		o.default = '60';
 		o.placeholder = '60';
@@ -153,7 +188,7 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'udp_fail_threshold', _('连续失败重拨阈值'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.datatype = 'uinteger';
 		o.default = '2';
 		o.placeholder = '2';
@@ -161,7 +196,7 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'udp_cooldown', _('重拨后冷却时间 (秒)'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.datatype = 'uinteger';
 		o.default = '180';
 		o.placeholder = '180';
@@ -169,11 +204,12 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.DynamicList, 'udp_targets', _('UDP 检测目标列表'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.placeholder = '223.5.5.5:53';
 		o.description = _('支持格式为 <code>IP/域名:端口</code>，自动识别常见协议（53: DNS, 3478: STUN, 123: NTP）。只要有任意一个目标通畅即视为网络正常。');
 
 		o = s.option(form.Button, '_btn_test_udp', _('连通性测试'));
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.inputtitle = _('⚡ 立即测试当前 UDP 连通性');
 		o.inputstyle = 'apply';
 		o.onclick = function() {
@@ -181,14 +217,14 @@ return view.extend({
 		};
 
 		o = s.option(form.Value, 'udp_log_file', _('QoS 独立持久化日志路径'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.default = '/etc/modem_redial_qos.log';
 		o.placeholder = '/etc/modem_redial_qos.log';
 		o.description = _('独立记录因 UDP QoS 阻断而触发的重拨日志。保存在 <code>/etc/</code> 目录下即使路由器重启也不会丢失。');
 		o.rmempty = false;
 
 		o = s.option(form.DummyValue, '_qos_log_view', _('QoS 触发重拨历史日志'));
-		o.depends('udp_watchdog_enabled', '1');
+		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.rawhtml = true;
 		o.cfgvalue = function() {
 			var initLog = (data[2] || '');
@@ -203,61 +239,68 @@ return view.extend({
 			'</div>';
 		};
 
-		// Ntfy 消息通知推送设置
-		s = m.section(form.NamedSection, 'config', 'modem_redial', _('Ntfy 消息通知推送'));
-		s.anonymous = true;
+		// 7. Ntfy 消息通知推送 (仅启用插件时可见)
+		o = s.option(form.DummyValue, '_header_ntfy');
+		o.depends('enabled', '1');
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			return '<div style="padding-top:20px;margin-bottom:6px;border-bottom:1px solid #e8e8e8;">' +
+				'<h3 style="font-size:15px;font-weight:600;color:#1890ff;margin:0 0 8px 0;display:inline-block;">🔔 ' + _('Ntfy 消息通知推送') + '</h3>' +
+			'</div>';
+		};
 
 		o = s.option(form.Flag, 'ntfy_enabled', _('启用 Ntfy 通知'));
+		o.depends('enabled', '1');
 		o.default = '0';
 		o.rmempty = false;
 		o.description = _('当发生重拨换 IP、UDP QoS 阻断或任务异常时，通过 <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">ntfy.sh</a> 或自建 ntfy 服务器向手机/桌面推送实时通知。');
 
 		o = s.option(form.Value, 'ntfy_server', _('Ntfy 服务器地址'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = 'https://ntfy.sh';
 		o.placeholder = 'https://ntfy.sh';
 		o.description = _('默认为官方公共服务器 <code>https://ntfy.sh</code>，若使用自建实例请填写您的完整服务器 URL。');
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'ntfy_topic', _('Topic 主题名称'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.placeholder = 'my_modem_alerts_xxxx';
 		o.description = _('ntfy 消息订阅主题（建议使用难以猜测的独特名称以防泄露，可在手机 ntfy App 中订阅此主题）。');
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'ntfy_token', _('访问令牌 Token (可选)'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.password = true;
 		o.placeholder = 'tk_... (若为公开主题可留空)';
 		o.description = _('若您的主题开启了权限保护，或自建服务器要求认证，请在此填写 Bearer Access Token。');
 
 		o = s.option(form.Flag, 'notify_event_manual', _('手动重拨完成时通知'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
 		o.description = _('在 WebUI 点击「⚡ 立即重拨换IP」或手动执行重拨成功后推送新 IP 信息。');
 
 		o = s.option(form.Flag, 'notify_event_cron', _('定时自动重拨完成时通知'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
 		o.description = _('凌晨 Cron 计划任务定时重拨成功后推送新 IP 信息（若夜间不想被打扰可关闭此项）。');
 
 		o = s.option(form.Flag, 'notify_event_qos', _('UDP QoS 阻断触发换 IP 时通知'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
 		o.description = _('当检测到遭遇运营商 UDP QoS 阻断并自动重新拨号换 IP 完成时推送警报与新 IP。');
 
 		o = s.option(form.Flag, 'notify_event_fail', _('重拨失败告警通知'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.default = '1';
 		o.description = _('无论手动、定时还是 QoS 触发，当重拨过程遭遇失败（如光猫登录失败、超时未连上等）时，立即发送高优先级告警。');
 
 		o = s.option(form.DummyValue, '_btn_test_ntfy_view', _('测试通知'));
-		o.depends('ntfy_enabled', '1');
+		o.depends({ 'enabled': '1', 'ntfy_enabled': '1' });
 		o.rawhtml = true;
 		o.cfgvalue = function() {
 			return '<div style="margin-top:5px;">' +
 				'<button type="button" class="btn cbi-button cbi-button-action" id="btn_test_ntfy" onclick="window.testNtfyNotification()">' +
-					'🔔 发送测试通知' +
+					'🔔 ' + _('发送测试通知') +
 				'</button>' +
 				'<span id="test_ntfy_tip" style="margin-left:10px;vertical-align:middle;font-size:13px;"></span>' +
 				'<div style="font-size:12px;color:#888;margin-top:6px;">' +
@@ -274,7 +317,7 @@ return view.extend({
 			var btn = document.getElementById('btn_manual_redial');
 			if (btn) {
 				btn.disabled = true;
-				btn.innerText = '⏳ 正在重新拨号中...';
+				btn.innerText = '⏳ ' + _('正在重新拨号中...');
 			}
 
 			if (window._modemRedialTimer) {
@@ -290,7 +333,7 @@ return view.extend({
 				var b = document.getElementById('btn_manual_redial');
 				if (b) {
 					b.disabled = false;
-					b.innerText = '⚡ 立即重拨换IP';
+					b.innerText = '⚡ ' + _('立即重拨换IP');
 				}
 				setTimeout(function() {
 					window.refreshModemStatus();
@@ -317,6 +360,7 @@ return view.extend({
 							logTxt.indexOf('超时未检测到') !== -1 ||
 							logTxt.indexOf('登录失败') !== -1 ||
 							logTxt.indexOf('未找到') !== -1 ||
+							logTxt.indexOf('处于关闭禁用状态') !== -1 ||
 							logTxt.indexOf('处于禁用状态') !== -1 ||
 							logTxt.indexOf('未配置') !== -1 ||
 							logTxt.indexOf('Traceback') !== -1) {
@@ -350,12 +394,19 @@ return view.extend({
 
 		// 挂载全局交互脚本
 		window.triggerModemRedial = function() {
+			var enabledWidget = document.querySelector('input[name="cbid.modem_redial.config.enabled"]') ||
+			                    document.getElementById('cbid.modem_redial.config.enabled');
+			if (enabledWidget && !enabledWidget.checked) {
+				ui.addNotification(null, E('p', _('插件当前处于关闭状态，请先开启「启用插件」并保存应用！')));
+				return;
+			}
+
 			if (!confirm('确定立即触发光猫重新拨号换IP吗？拨号期间宽带会短暂中断 3~5 秒。')) return;
 
 			var btn = document.getElementById('btn_manual_redial');
 			if (btn) {
 				btn.disabled = true;
-				btn.innerText = '⏳ 正在启动任务...';
+				btn.innerText = '⏳ ' + _('正在启动任务...');
 			}
 
 			var logBox = document.getElementById('modem_redial_log');
@@ -369,17 +420,26 @@ return view.extend({
 
 				fs.exec('/usr/bin/modem_redial', ['--start']).then(function(res) {
 					var stdout = (res && res.stdout) ? res.stdout.trim() : '';
+					if (stdout.indexOf('PLUGIN_DISABLED') !== -1) {
+						if (window._modemRedialTimer) {
+							clearInterval(window._modemRedialTimer);
+							window._modemRedialTimer = null;
+						}
+						if (btn) { btn.disabled = false; btn.innerText = '⚡ ' + _('立即重拨换IP'); }
+						ui.addNotification(null, E('p', _('插件当前处于关闭状态，无法执行重拨任务！')));
+						return;
+					}
 					if (stdout.indexOf('NOT_CONFIGURED') !== -1) {
 						if (window._modemRedialTimer) {
 							clearInterval(window._modemRedialTimer);
 							window._modemRedialTimer = null;
 						}
-						if (btn) { btn.disabled = false; btn.innerText = '⚡ 立即重拨换IP'; }
-						ui.addNotification(null, E('p', '光猫后台地址、用户名或密码未配置，请先保存配置！'));
+						if (btn) { btn.disabled = false; btn.innerText = '⚡ ' + _('立即重拨换IP'); }
+						ui.addNotification(null, E('p', _('光猫后台地址、用户名或密码未配置，请先保存配置！')));
 						return;
 					}
 					if (stdout.indexOf('ALREADY_RUNNING') !== -1) {
-						ui.addNotification(null, E('p', '已有重拨换IP任务正在后台运行中，请勿重复触发！'));
+						ui.addNotification(null, E('p', _('已有重拨换IP任务正在后台运行中，请勿重复触发！')));
 						return;
 					}
 				}).catch(function(err) {
@@ -395,9 +455,9 @@ return view.extend({
 						}
 						if (btn) {
 							btn.disabled = false;
-							btn.innerText = '⚡ 立即重拨换IP';
+							btn.innerText = '⚡ ' + _('立即重拨换IP');
 						}
-						ui.addNotification(null, E('p', '启动重拨任务失败: ' + (err.message || err)));
+						ui.addNotification(null, E('p', _('启动重拨任务失败: ') + (err.message || err)));
 					});
 				});
 			});
@@ -414,7 +474,7 @@ return view.extend({
 					if (ipEl) ipEl.innerText = data.ip || '未知';
 					if (statusEl) {
 						statusEl.innerText = data.status || '未知';
-						statusEl.style.color = (data.status === 'Connected' || data.status === '已连接') ? '#28a745' : ((data.status === 'Disconnected' || data.status === '未连接') ? '#dc3545' : '#ffc107');
+						statusEl.style.color = (data.status === 'Connected' || data.status === '已连接') ? '#28a745' : ((data.status === 'Disconnected' || data.status === '未连接') ? '#dc3545' : (data.status === '未配置' || data.status === '未启用' ? '#6c757d' : '#ffc107'));
 					}
 					if (triggerEl) triggerEl.innerText = data.trigger || '-';
 
@@ -446,13 +506,13 @@ return view.extend({
 			if (tip) tip.innerHTML = '';
 			if (btn) {
 				btn.disabled = true;
-				btn.innerText = '⏳ 正在检查最新版本...';
+				btn.innerText = '⏳ ' + _('正在检查最新版本...');
 			}
 
 			fs.exec('/usr/bin/modem_redial', ['--check-update']).then(function(res) {
 				if (btn) {
 					btn.disabled = false;
-					btn.innerText = '🚀 检查更新';
+					btn.innerText = '🚀 ' + _('检查更新');
 				}
 
 				var raw = (res && res.stdout) ? res.stdout.trim() : '';
@@ -461,30 +521,30 @@ return view.extend({
 					info = JSON.parse(raw || '{}');
 				} catch(e) {
 					if (tip) {
-						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ 解析更新信息失败</span>';
+						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('解析更新信息失败') + '</span>';
 					} else {
-						ui.addNotification(null, E('p', '解析更新信息失败: ' + raw));
+						ui.addNotification(null, E('p', _('解析更新信息失败: ') + raw));
 					}
 					return;
 				}
 
 				if (!info.success) {
 					if (tip) {
-						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + (info.error || '检查更新失败') + '</span>';
+						tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + (info.error || _('检查更新失败')) + '</span>';
 					} else {
-						ui.addNotification(null, E('p', '检查更新失败: ' + (info.error || '无法连接 GitHub')));
+						ui.addNotification(null, E('p', _('检查更新失败: ') + (info.error || _('无法连接 GitHub'))));
 					}
 					return;
 				}
 
 				if (!info.has_update) {
 					if (tip) {
-						tip.innerHTML = '<span style="color:#2da44e;font-size:13px;font-weight:600;">✅ 已经是最新版</span>';
+						tip.innerHTML = '<span style="color:#2da44e;font-size:13px;font-weight:600;">✅ ' + _('已经是最新版') + '</span>';
 					}
 					return;
 				}
 
-				// 发现新版本，弹出优雅确认弹窗
+				// 发现新版本，弹出确认弹窗
 				var notesContent = info.release_notes ? [
 					E('div', { 'style': 'font-size:12px;color:#888;margin-top:10px;margin-bottom:4px;' }, _('更新说明:')),
 					E('pre', { 'style': 'background:#f7f7f7;border:1px solid #e8e8e8;padding:8px 12px;border-radius:4px;max-height:160px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;font-size:12px;' }, [ info.release_notes ])
@@ -518,12 +578,12 @@ return view.extend({
 			}).catch(function(err) {
 				if (btn) {
 					btn.disabled = false;
-					btn.innerText = '🚀 检查更新';
+					btn.innerText = '🚀 ' + _('检查更新');
 				}
 				if (tip) {
-					tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ 检查失败: ' + (err.message || err) + '</span>';
+					tip.innerHTML = '<span style="color:#ff4d4f;font-size:12px;">❌ ' + _('检查失败: ') + (err.message || err) + '</span>';
 				} else {
-					ui.addNotification(null, E('p', '请求检查更新出错: ' + (err.message || err)));
+					ui.addNotification(null, E('p', _('请求检查更新出错: ') + (err.message || err)));
 				}
 			});
 		};
@@ -545,6 +605,18 @@ return view.extend({
 					data = JSON.parse(raw || '{}');
 				} catch(e) {
 					data = { all_failed: true, error: raw };
+				}
+
+				if (data.error && (!data.results || data.results.length === 0)) {
+					ui.showModal(_('测试提示'), [
+						E('div', { 'style': 'padding:15px 5px;' }, [
+							E('p', { 'style': 'color:#dc3545;font-size:14px;' }, '⚠️ ' + data.error),
+							E('div', { 'class': 'right', 'style': 'margin-top:15px;' }, [
+								E('button', { 'class': 'btn', 'click': ui.hideModal }, _('关闭'))
+							])
+						])
+					]);
+					return;
 				}
 
 				var results = data.results || [];
@@ -696,7 +768,7 @@ return view.extend({
 			var tip = document.getElementById('test_ntfy_tip');
 			if (btn) {
 				btn.disabled = true;
-				btn.innerText = '⏳ 正在发送测试通知...';
+				btn.innerText = '⏳ ' + _('正在发送测试通知...');
 			}
 			if (tip) tip.innerHTML = '';
 
@@ -704,29 +776,29 @@ return view.extend({
 				window._isTestingNtfy = false;
 				if (btn) {
 					btn.disabled = false;
-					btn.innerText = '🔔 发送测试通知';
+					btn.innerText = '🔔 ' + _('发送测试通知');
 				}
 				var raw = (res && res.stdout) ? res.stdout.trim() : '';
 				var info = {};
 				try {
 					info = JSON.parse(raw || '{}');
 				} catch(e) {
-					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ 解析测试结果失败: ' + raw + '</span>';
+					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ ' + _('解析测试结果失败: ') + raw + '</span>';
 					return;
 				}
 
 				if (info.success) {
-					if (tip) tip.innerHTML = '<span style="color:#2da44e;font-weight:600;">✅ 测试通知已发送，请检查您的手机或终端设备！</span>';
+					if (tip) tip.innerHTML = '<span style="color:#2da44e;font-weight:600;">✅ ' + _('测试通知已发送，请检查您的手机或终端设备！') + '</span>';
 				} else {
-					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;font-weight:600;">❌ 发送失败: ' + (info.error || '未知错误') + '</span>';
+					if (tip) tip.innerHTML = '<span style="color:#ff4d4f;font-weight:600;">❌ ' + _('发送失败: ') + (info.error || '未知错误') + '</span>';
 				}
 			}).catch(function(err) {
 				window._isTestingNtfy = false;
 				if (btn) {
 					btn.disabled = false;
-					btn.innerText = '🔔 发送测试通知';
+					btn.innerText = '🔔 ' + _('发送测试通知');
 				}
-				if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ 请求出错: ' + (err.message || err) + '</span>';
+				if (tip) tip.innerHTML = '<span style="color:#ff4d4f;">❌ ' + _('请求出错: ') + (err.message || err) + '</span>';
 			});
 		};
 

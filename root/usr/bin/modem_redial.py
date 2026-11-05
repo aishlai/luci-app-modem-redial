@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.3.3-1"
+__version__ = "1.3.4-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -443,6 +443,17 @@ class HuaweiONTClient:
 
 def query_status_json(router_ip: str, username: str, password: str, wan_name: str) -> str:
     """输出 JSON 格式状态供 LuCI 前端异步读取"""
+    uci_conf = load_uci_config()
+    if uci_conf.get("enabled", "0") != "1":
+        return json.dumps({
+            "status": "未启用",
+            "ip": "未启用",
+            "trigger": "-",
+            "wan": wan_name or "-",
+            "running": False,
+            "enabled": False
+        }, ensure_ascii=False)
+
     # 若重拨进程正在运行，直接返回状态，避免并发登录导致光猫锁死或踢出会话
     if is_redial_running():
         return json.dumps({
@@ -500,8 +511,8 @@ def send_ntfy_notification(
     if conf is None:
         conf = load_uci_config()
 
-    if str(conf.get("ntfy_enabled", "0")) != "1":
-        return False, "Ntfy 功能未启用"
+    if str(conf.get("enabled", "0")) != "1" or str(conf.get("ntfy_enabled", "0")) != "1":
+        return False, "插件未启用或 Ntfy 功能未启用"
 
     server = (conf.get("ntfy_server") or "https://ntfy.sh").strip().rstrip("/")
     topic = (conf.get("ntfy_topic") or "").strip().lstrip("/")
@@ -585,7 +596,7 @@ def notify_redial_result(
     """根据用户配置的事件定义，发送对应的 Ntfy Markdown 格式消息通知"""
     try:
         conf = load_uci_config()
-        if str(conf.get("ntfy_enabled", "0")) != "1":
+        if str(conf.get("enabled", "0")) != "1" or str(conf.get("ntfy_enabled", "0")) != "1":
             return
 
         # 检查当前事件是否在用户的接收订阅列表中
@@ -1334,6 +1345,9 @@ def main():
     args = parser.parse_args()
 
     if args.test_ntfy:
+        if str(uci_conf.get("enabled", "0")) != "1":
+            print(json.dumps({"success": False, "error": "插件当前处于关闭状态，请先开启「启用插件」并保存应用"}, ensure_ascii=False))
+            sys.exit(0)
         if str(uci_conf.get("ntfy_enabled", "0")) != "1":
             print(json.dumps({"success": False, "error": "请先开启「启用 Ntfy 通知」开关并点击保存应用"}, ensure_ascii=False))
             sys.exit(0)
@@ -1381,6 +1395,9 @@ def main():
         sys.exit(0)
 
     if args.test_udp:
+        if str(uci_conf.get("enabled", "0")) != "1":
+            print(json.dumps({"all_failed": True, "error": "插件当前处于关闭状态，请先开启「启用插件」并保存应用", "results": []}, ensure_ascii=False))
+            sys.exit(0)
         targets = uci_conf.get("udp_targets") or DEFAULT_UDP_TARGETS
         if isinstance(targets, str):
             targets = [t.strip() for t in targets.split() if t.strip()]
@@ -1415,10 +1432,14 @@ def main():
         log("[!] 已有重拨任务在运行中，请勿重复触发！", args.logfile)
         sys.exit(0)
 
-    # 如果是定时任务模式，严格校验插件是否开启
-    if args.cron and uci_conf.get("enabled", "0") == "0":
-        log("[!] 插件处于禁用状态，跳过定时执行。", args.logfile)
-        sys.exit(0)
+    # 严格校验插件主开关是否开启：若未开启，阻止所有重拨任务（包括手动触发与定时任务）
+    if uci_conf.get("enabled", "0") != "1":
+        log("[!] 插件处于关闭禁用状态，已阻止执行重拨任务。", args.logfile)
+        if args.start:
+            print("PLUGIN_DISABLED")
+            sys.exit(0)
+        print("错误: 插件当前处于关闭状态，请先在配置中开启「启用插件」！")
+        sys.exit(1)
 
     if not args.url or not args.user or not args.password:
         log("[!] 光猫后台地址、登录账号或密码未配置，请先在后台设置中保存！", args.logfile)
