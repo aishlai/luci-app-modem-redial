@@ -1,26 +1,30 @@
-# Release v1.5.1 / 版本发布说明
+# Release v1.5.2 / 版本发布说明
 
 ## 🇨🇳 中文更新日志 (Changelog in Chinese)
 
-### 🐛 重点修复：升级过程「XHR request timed out」彻底根治
+### 🎨 界面视觉与交互排版优化
 
-1. **一键升级全链路异步守护化重构**
-   - **痛点分析**：旧版本执行一键在线升级时，前端以阻塞同步方式等待 `opkg install` 完成；由于安装过程中网络镜像耗时以及系统重载服务可能打断会话，导致前端在 30 秒后抛出 `❌ XHR request timed out` 报错（尽管底层实际已升级成功）；
-   - **异步守护架构**：前端触发升级后，后端通过独立守护进程（Daemonized Task）毫秒级立即响应并转入后台运行，彻底切断与网页 XHR 会话的物理阻塞；
-   - **实时进度轮询呈现**：前端升级弹窗新增动态进度条与多阶段状态轮询反馈（`20% 准备安装包` -> `45% 高速镜像下载` -> `80% 覆盖安装与配置保护` -> `100% 升级成功`），全面杜绝超时报错假象；
-   - **清理 postinst 会话打断**：移除了安装包 postinst 过程中的全局会话重载，避免打断当前浏览器与 rpcd 的正常通讯。
+1. **实时连通性监测日志看板高度调优**
+   - 将「监测重拨」标签页中的实时监测黑底终端看板高度由 `190px` 适度调高至 `310px`；
+   - 完美适配 16 行完整探测报告（表头、网络状态诊断、全部公共节点延迟与详情），无需手动上下滚动即可一览全貌。
+
+2. **操作按钮左对齐与说明文本顺序调整**
+   - 调换底部控制栏顺序：将三个操作按钮（`🔄 刷新实时日志`、`⚡ 立即探测一轮`、`📊 详细体检弹窗`）靠左统一对齐放置；
+   - 内存免磨损说明文本（`💡 说明: 本日志保存在内存中 (/tmp)，每轮检测自动刷新覆盖，不消耗闪存寿命。`）紧随按钮之后展示，布局层级更清晰，点击更顺手。
 
 ---
 
 ## 🇺🇸 English Changelog
 
-### 🐛 Critical Bug Fix: Eliminated "XHR request timed out" During Upgrade
+### 🎨 UI & Layout Enhancements
 
-1. **Fully Asynchronous & Daemonized Upgrade Pipeline**
-   - **Root Cause**: Previously, in-place upgrades waited synchronously for `opkg install` to terminate. Download latency from upstream mirrors and service reloads occasionally caused HTTP connections to drop or exceed LuCI's 30-second XHR limit, resulting in a false `❌ XHR request timed out` error even though the installation succeeded.
-   - **Detached Daemon Pipeline**: The upgrade process is now launched asynchronously in an isolated background daemon via `--start-update`, returning immediately to the caller in milliseconds.
-   - **Live Progress Polling & UI Progress Bar**: The upgrade modal now displays a smooth, multi-stage progress bar and telemetry updates (`20% Initializing` -> `45% Downloading` -> `80% Installing & Protecting Config` -> `100% Complete`), eliminating all XHR timeout false alarms.
-   - **Postinst Stability**: Removed disruptive session reloads from package post-install scripts to ensure rock-solid frontend communication.
+1. **Expanded Live Telemetry Log View Height**
+   - Increased the height of the live telemetry terminal box from `190px` to `310px`.
+   - Comfortably renders the full 16-line telemetry report (headers, network diagnosis, all probe targets, and latencies) without requiring manual scrolling.
+
+2. **Left-Aligned Action Buttons & Reordered Legend**
+   - Reordered the control footer: action buttons (`🔄 Refresh Live Log`, `⚡ Probe Round Now`, `📊 Detailed Diagnostics`) are now neatly left-aligned for quicker access.
+   - The memory-only zero-flash-wear notice is positioned following the buttons, providing a clean and intuitive layout.
 
 ---
 
@@ -32,5 +36,5 @@
 **OpenWrt 命令行安装 / Upgrade via SSH**:
 ```bash
 opkg update && opkg install python3
-opkg install --force-reinstall luci-app-modem-redial_1.5.1-1_all.ipk
+opkg install --force-reinstall luci-app-modem-redial_1.5.2-1_all.ipk
 ```
