@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.5-1"
+__version__ = "1.5.6-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"

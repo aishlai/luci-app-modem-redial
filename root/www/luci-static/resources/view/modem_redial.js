@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.5';
+var PLUGIN_VERSION = 'v1.5.6';
 
 return view.extend({
 	handleSaveApply: function(ev, mode) {
