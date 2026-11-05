@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.4.2';
+var PLUGIN_VERSION = 'v1.4.3';
 
 return view.extend({
 	load: function() {
@@ -60,24 +60,20 @@ return view.extend({
 					'<div style="font-size:14px;font-weight:600;color:#333;word-break:break-all;margin-top:2px;">' + wanName + '</div>' +
 				'</div>' +
 			'</div>' +
-			'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-top:15px;margin-bottom:8px;">' +
-				'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;">' +
-					'<button type="button" class="btn cbi-button-apply" id="btn_manual_redial" onclick="window.triggerModemRedial()">' +
-						'⚡ ' + _('立即重拨号换IP') +
-					'</button>' +
-					'<button type="button" class="btn cbi-button-action" onclick="window.showLogModal(false)">' +
-						'📜 ' + _('查看日志') +
-					'</button>' +
-					'<button type="button" class="btn cbi-button-neutral" id="btn_check_update" onclick="window.checkPluginUpdate(false)">' +
-						'🚀 ' + _('检查更新') +
-					'</button>' +
-					'<span id="check_update_tip" style="margin-left:5px;vertical-align:middle;display:inline-block;"></span>' +
-				'</div>' +
-				'<div>' +
-					'<button type="button" class="btn cbi-button-reset" onclick="window.refreshModemStatus()">' +
-						'🔄 ' + _('刷新状态') +
-					'</button>' +
-				'</div>' +
+			'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:15px;margin-bottom:8px;">' +
+				'<button type="button" class="btn cbi-button-apply" id="btn_manual_redial" onclick="window.triggerModemRedial()">' +
+					'⚡ ' + _('立即重拨号换IP') +
+				'</button>' +
+				'<button type="button" class="btn cbi-button-reset" onclick="window.refreshModemStatus()">' +
+					'🔄 ' + _('刷新状态') +
+				'</button>' +
+				'<button type="button" class="btn cbi-button-action" onclick="window.showLogModal(false)">' +
+					'📜 ' + _('查看日志') +
+				'</button>' +
+				'<button type="button" class="btn cbi-button-neutral" id="btn_check_update" onclick="window.checkPluginUpdate(false)">' +
+					'🚀 ' + _('检查更新') +
+				'</button>' +
+				'<span id="check_update_tip" style="margin-left:5px;vertical-align:middle;display:inline-block;"></span>' +
 			'</div>';
 		};
 
