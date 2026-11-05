@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-modem-redial
-PKG_VERSION:=1.5.9
+PKG_VERSION:=1.6.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT

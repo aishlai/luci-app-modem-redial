@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.5.9-1"
+__version__ = "1.6.0-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 WATCHDOG_PID_FILE = "/tmp/run/modem_redial_watchdog.pid"
@@ -870,6 +870,22 @@ def redial_wan(
     source_desc = "手动触发" if trigger_source == "manual" else ("定时任务" if trigger_source == "cron" else "QoS 阻断触发")
     set_redial_cooldown(cooldown, reason=f"正在执行重拨换 IP ({source_desc})")
 
+    try:
+        os.makedirs(os.path.dirname(STATUS_CACHE_FILE), exist_ok=True)
+        with open(STATUS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "status": "重拨中...",
+                "raw_status": "Disconnecting",
+                "ip": "正在获取新IP...",
+                "trigger": "切换中",
+                "raw_trigger": "Manual",
+                "wan": target_wan_name,
+                "running": True,
+                "_time": time.time()
+            }, f, ensure_ascii=False)
+    except Exception:
+        pass
+
     client = HuaweiONTClient(base_url=router_ip, username=username, password=password)
 
     switched_to_manual = False
@@ -977,6 +993,22 @@ def redial_wan(
         log("[*] 重拨换IP流程结束。", log_file)
         # 重拨流程结束，从当前时刻起继续维持充足的冷却缓冲期，给新 IP 与网络完全稳定留足时间
         set_redial_cooldown(cooldown, reason="重拨换 IP 已完成，冷却缓冲中")
+        if new_ip:
+            try:
+                os.makedirs(os.path.dirname(STATUS_CACHE_FILE), exist_ok=True)
+                with open(STATUS_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "status": "已连接",
+                        "raw_status": "Connected",
+                        "ip": new_ip,
+                        "trigger": "自动拨号",
+                        "raw_trigger": "AlwaysOn",
+                        "wan": target_wan_name,
+                        "running": False,
+                        "_time": time.time()
+                    }, f, ensure_ascii=False)
+            except Exception:
+                pass
         remove_pid()
 
         # 触发 Ntfy 消息通知（在会话完全注销、网络恢复后发出）

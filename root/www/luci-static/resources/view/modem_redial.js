@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.5.9';
+var PLUGIN_VERSION = 'v1.6.0';
 
 function formatConnStatus(status) {
 	if (!status || status === '未知') return _('未知');
@@ -49,8 +49,7 @@ return view.extend({
 
 	load: function() {
 		return Promise.all([
-			L.resolveDefault(fs.read('/tmp/log/modem_redial.log'), ''),
-			L.resolveDefault(fs.exec('/usr/bin/modem_redial', ['--status']), {}),
+			L.resolveDefault(fs.read('/tmp/log/modem_redial_status_cache.json'), ''),
 			L.resolveDefault(fs.read('/etc/modem_redial_qos.log'), ''),
 			L.resolveDefault(fs.read('/tmp/log/modem_redial_live_qos.log'), '')
 		]);
@@ -73,15 +72,16 @@ return view.extend({
 		o.cfgvalue = function() {
 			var statusObj = {};
 			try {
-				var raw = (data[1] && data[1].stdout) ? data[1].stdout : data[1];
+				var raw = data[0] || '';
 				statusObj = JSON.parse(raw || '{}');
 			} catch(e) {}
-			var currentIP = statusObj.ip || '未知';
-			var connStatus = formatConnStatus(statusObj.status);
-			var triggerMode = formatTriggerMode(statusObj.trigger);
-			var wanName = statusObj.wan || '2_INTERNET_R_VID_3961';
+			var hasCache = (statusObj && (statusObj.ip || statusObj.status));
+			var currentIP = (hasCache && statusObj.ip) ? statusObj.ip : '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('读取中...') + '</span>';
+			var connStatus = (hasCache && statusObj.status) ? formatConnStatus(statusObj.status) : '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('查询中...') + '</span>';
+			var triggerMode = (hasCache && statusObj.trigger) ? formatTriggerMode(statusObj.trigger) : '<span style="color:#888;font-size:14px;font-weight:normal;">⏳ ' + _('查询中...') + '</span>';
+			var wanName = (statusObj && statusObj.wan) ? statusObj.wan : '2_INTERNET_R_VID_3961';
 
-			var statusColor = getConnStatusColor(connStatus);
+			var statusColor = (hasCache && statusObj.status) ? getConnStatusColor(connStatus) : '#ffc107';
 
 			return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:15px;margin-top:5px;">' +
 				'<div style="flex:1 1 180px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:12px 14px;">' +
@@ -243,7 +243,7 @@ return view.extend({
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.rawhtml = true;
 		o.cfgvalue = function() {
-			var initLiveLog = (data[3] || '');
+			var initLiveLog = (data[2] || '');
 			return '<div style="margin-top:5px;width:100%;overflow-x:auto;">' +
 				'<textarea id="modem_redial_live_qos_log" class="cbi-input-textarea" cols="100" wrap="off" style="width:100%;min-width:100ch;height:310px;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;line-height:1.45;box-sizing:border-box;white-space:pre;overflow-x:auto;resize:vertical;" readonly="readonly" placeholder="' + _('暂无实时监测数据。后台守护进程每轮检测后将自动在此覆盖刷新，也可点击下方「⚡ 立即探测一轮」...') + '">' +
 				initLiveLog +
@@ -268,7 +268,7 @@ return view.extend({
 		o.depends({ 'enabled': '1', 'udp_watchdog_enabled': '1' });
 		o.rawhtml = true;
 		o.cfgvalue = function() {
-			var initLog = (data[2] || '');
+			var initLog = (data[1] || '');
 			return '<div style="margin-top:5px;width:100%;overflow-x:auto;">' +
 				'<textarea id="modem_redial_qos_log" class="cbi-input-textarea" cols="100" wrap="off" style="width:100%;min-width:100ch;height:150px;font-family:monospace;font-size:12px;background:#f8f9fa;color:#333;line-height:1.4;box-sizing:border-box;white-space:pre;overflow-x:auto;resize:vertical;" readonly="readonly" placeholder="' + _('暂无 UDP QoS 触发重拨记录 (仅在全部目标检测失败并执行重拨换 IP 时记录)...') + '">' +
 				initLog +
@@ -1174,7 +1174,7 @@ return view.extend({
 
 		// 若页面初始化加载时检测到已有重拨任务在运行，自动弹出悬浮层展示进度
 		try {
-			var rawInit = (data[1] && data[1].stdout) ? data[1].stdout : data[1];
+			var rawInit = data[0] || '';
 			var initialStatus = JSON.parse(rawInit || '{}');
 			if (initialStatus.running) {
 				setTimeout(function() {
@@ -1183,13 +1183,20 @@ return view.extend({
 			}
 		} catch(e) {}
 
+		// 页面初始化极速秒开渲染完成后，延时 100ms 在后台异步查询光猫最新实时状态 (绝不阻塞首屏与 uci 批处理)
+		setTimeout(function() {
+			window.refreshModemStatus(false);
+		}, 100);
+
+		// 延时 2 秒后在后台完全异步静默拉起 UDP 连通性监测守护进程 (绝不阻塞页面初次渲染与 uci.get 批处理)
+		setTimeout(function() {
+			fs.exec('/usr/bin/modem_redial', ['--start-watchdog']);
+		}, 2000);
+
 		// 每次进入插件，延时 3.5 秒后在后台完全异步静默检测更新，绝不阻塞首次页面渲染与交互
 		setTimeout(function() {
 			window.checkPluginUpdate(true);
 		}, 3500);
-
-		// 保底启动 UDP 连通性监测守护进程 (若已启用但未在运行，秒级拉起)
-		fs.exec('/usr/bin/modem_redial', ['--start-watchdog']);
 
 		// 周期性轮询刷新 UDP 实时监测日志 (后台静默读取最新单轮日志，避开聚焦选中文本状态)
 		setInterval(function() {
