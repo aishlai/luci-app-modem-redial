@@ -4,7 +4,7 @@
 'require fs';
 'require ui';
 
-var PLUGIN_VERSION = 'v1.3.2';
+var PLUGIN_VERSION = 'v1.3.3';
 
 return view.extend({
 	load: function() {

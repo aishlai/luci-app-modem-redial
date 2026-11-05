@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "1.3.2-1"
+__version__ = "1.3.3-1"
 
 PID_FILE = "/tmp/run/modem_redial.pid"
 
@@ -546,21 +546,28 @@ def send_ntfy_notification(
     data_bytes = message.encode("utf-8")
     req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
 
-    try:
-        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-            if resp.status in (200, 201, 204):
-                return True, "发送成功"
-            else:
-                return False, f"Ntfy 服务器返回状态码: {resp.status}"
-    except urllib.error.HTTPError as e:
-        err_body = ""
+    last_err = ""
+    for attempt in range(1, 3):
         try:
-            err_body = e.read().decode("utf-8", errors="ignore")[:100]
-        except Exception:
-            pass
-        return False, f"HTTP {e.code} 错误: {err_body or e.reason}"
-    except Exception as e:
-        return False, f"网络请求异常: {e}"
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                if resp.status in (200, 201, 204):
+                    return True, "发送成功"
+                else:
+                    last_err = f"Ntfy 服务器返回状态码: {resp.status}"
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="ignore")[:100]
+            except Exception:
+                pass
+            last_err = f"HTTP {e.code} 错误: {err_body or e.reason}"
+        except Exception as e:
+            last_err = f"网络请求异常: {e}"
+
+        if attempt < 2:
+            time.sleep(3)
+
+    return False, last_err
 
 
 def notify_redial_result(
@@ -572,6 +579,7 @@ def notify_redial_result(
     fail_reason: str = "",
     wan_name: str = "",
     extra_info: str = "",
+    delay_seconds: int = 10,
     log_file: str = None
 ):
     """根据用户配置的事件定义，发送对应的 Ntfy Markdown 格式消息通知"""
@@ -591,6 +599,11 @@ def notify_redial_result(
                 return
             elif trigger_source == "qos" and str(conf.get("notify_event_qos", "1")) != "1":
                 return
+
+        # 刚刚联网时路由表与 DNS 可能尚未完全就绪，延时等待确保网络链路彻底畅通
+        if delay_seconds > 0:
+            log(f"[*] [Ntfy] 刚刚完成联网，等待 {delay_seconds} 秒缓冲延时以确保网络与 DNS 完全稳定后再推送通知...", log_file)
+            time.sleep(delay_seconds)
 
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         trigger_names = {
